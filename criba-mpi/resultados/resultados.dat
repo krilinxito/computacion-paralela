@@ -1,0 +1,6 @@
+# Criba de Eratostenes distribuida - N=10000000 - Procesos=4
+# Proceso  Inicio  Fin  Primos
+0 2 2500000 183072
+1 2500001 5000000 165441
+2 5000001 7500000 159748
+3 7500001 10000000 156318

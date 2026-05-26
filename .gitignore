@@ -1,0 +1,17 @@
+# Binarios compilados
+criba-mpi/criba
+kmeans-openmp/kmeans
+
+# Archivos temporales de LaTeX (en informe/)
+**/informe/*.aux
+**/informe/*.log
+**/informe/*.out
+**/informe/*.toc
+**/informe/*.fls
+**/informe/*.fdb_latexmk
+**/informe/*.synctex.gz
+
+# Archivos temporales del sistema
+.DS_Store
+Thumbs.db
+*~

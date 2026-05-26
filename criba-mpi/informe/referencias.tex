@@ -1,0 +1,107 @@
+% =============================================================
+% referencias.tex — Bibliografía IEEE separada
+%
+% Referencias reales y verificables sobre:
+%   - Criba de Eratóstenes y algoritmos de criba
+%   - MPI y programación paralela
+%   - Computación distribuida
+%
+% Compilar:
+%   pdflatex referencias.tex
+% =============================================================
+
+\documentclass[12pt]{article}
+
+% Nota: para hifenación en español instalar: sudo dnf install texlive-babel-spanish
+\usepackage{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{url}
+\usepackage[margin=2.5cm]{geometry}
+
+\title{Referencias Bibliográficas\\
+       \large Criba de Eratóstenes Distribuida con MPI}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+% =============================================================
+% Formato IEEE para bibliografías:
+% [número]  Inicial(es). Apellido(s), "Título del artículo",
+%           Nombre de la publicación, vol. X, no. Y,
+%           pp. AAA--BBB, Mes Año.
+% =============================================================
+
+\begin{thebibliography}{10}
+
+% ── Libros sobre MPI ─────────────────────────────────────────
+
+\bibitem{gropp1999}
+W.~Gropp, E.~Lusk, and A.~Skjellum,
+\textit{Using MPI: Portable Parallel Programming with the Message Passing
+Interface}, 2nd~ed.
+Cambridge, MA, USA: MIT Press, 1999, ISBN 978-0-262-57134-5.
+
+\bibitem{gropp1998advanced}
+W.~Gropp, E.~Lusk, and R.~Thakur,
+\textit{Using MPI-2: Advanced Features of the Message Passing Interface}.
+Cambridge, MA, USA: MIT Press, 1999, ISBN 978-0-262-57133-8.
+
+\bibitem{quinn2003}
+M.~J. Quinn,
+\textit{Parallel Programming in C with MPI and OpenMP}.
+New York, NY, USA: McGraw-Hill Education, 2003, ISBN 978-0-072-82256-4.
+
+\bibitem{pacheco2011}
+P.~S. Pacheco,
+\textit{An Introduction to Parallel Programming}.
+Burlington, MA, USA: Morgan Kaufmann, 2011, ISBN 978-0-123-74260-5.
+
+% ── Estándar MPI ─────────────────────────────────────────────
+
+\bibitem{mpiforum2021}
+Message Passing Interface Forum,
+``MPI: A Message-Passing Interface Standard, Version 4.0,''
+Technical Report, Jun.~2021.
+[Online]. Available: \url{https://www.mpi-forum.org/docs/mpi-4.0/mpi40-report.pdf}
+
+% ── Algoritmos numéricos y criba ─────────────────────────────
+
+\bibitem{knuth1997}
+D.~E. Knuth,
+\textit{The Art of Computer Programming, Vol.~2: Seminumerical Algorithms},
+3rd~ed.
+Reading, MA, USA: Addison-Wesley, 1997, ISBN 978-0-201-89684-8.
+
+\bibitem{bach1996}
+E.~Bach and J.~Shallit,
+\textit{Algorithmic Number Theory, Vol.~1: Efficient Algorithms}.
+Cambridge, MA, USA: MIT Press, 1996, ISBN 978-0-262-02405-1.
+
+\bibitem{bays1977}
+C.~Bays and R.~H. Hudson,
+``The segmented sieve of Eratosthenes and primes in arithmetic progressions
+to $10^{12}$,''
+\textit{BIT Numerical Mathematics}, vol.~17, no.~2, pp.~121--127, Jun.~1977.
+DOI: \url{https://doi.org/10.1007/BF01932283}
+
+\bibitem{pritchard1982}
+P.~Pritchard,
+``Explaining the wheel factorization,''
+\textit{BIT Numerical Mathematics}, vol.~22, no.~4, pp.~442--454, Dec.~1982.
+DOI: \url{https://doi.org/10.1007/BF01934411}
+
+\bibitem{oliveira2014}
+T.~Oliveira~e~Silva, S.~Herzog, and S.~Pardi,
+``Empirical verification of the even Goldbach conjecture, and computation of
+prime gaps, up to $4 \times 10^{18}$,''
+\textit{Mathematics of Computation}, vol.~83, no.~288, pp.~2033--2060, 2014.
+DOI: \url{https://doi.org/10.1090/S0025-5718-2013-02787-1}
+
+\end{thebibliography}
+
+\end{document}

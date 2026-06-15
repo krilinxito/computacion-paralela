@@ -13,13 +13,13 @@ run: $(TARGET)
 	./$(TARGET)
 
 # Genera las graficas (requiere gnuplot y que ./kmeans ya se haya ejecutado)
-plots: resultados/resultados.dat resultados/speedup.dat
+plots: resultados/benchmark.dat
 	gnuplot graficar.gp
 
 # Ejecuta el programa y luego genera las graficas en un solo paso
 all-plots: run plots
 
-resultados/resultados.dat resultados/speedup.dat: $(TARGET)
+resultados/benchmark.dat: $(TARGET)
 	./$(TARGET)
 
 # ── Compilar informe IEEE ────────────────────────────────────
@@ -31,8 +31,8 @@ referencias:
 
 clean:
 	rm -f $(TARGET)
-	rm -f resultados/resultados.dat resultados/speedup.dat
-	rm -f resultados/clusters.png resultados/speedup.png
+	rm -f resultados/benchmark.dat
+	rm -f resultados/speedup.png resultados/scaling.png
 	rm -f informe/*.aux informe/*.log informe/*.out
 
-.PHONY: all run plots all-plots clean
+.PHONY: all run plots all-plots clean informe referencias

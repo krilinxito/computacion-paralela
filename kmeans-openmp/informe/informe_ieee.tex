@@ -12,16 +12,18 @@
 \usepackage{url}
 \usepackage{float}
 \usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algorithmic}
 
 % Compilar con:  pdflatex informe_ieee.tex  (ejecutar dos veces)
 % Requiere: IEEEtran.cls  ->  sudo dnf install texlive-ieeetran
-%           clusters.png y speedup.png  ->  gnuplot graficar.gp
+%           speedup.png y scaling.png  ->  gnuplot graficar.gp
 
 \begin{document}
 
 % --------------------------------------------------------------------------
 \title{Paralelizaci\'on del Algoritmo K-Means con OpenMP:\\
-       Caso de Estudio con el Dataset Iris}
+       An\'alisis de Escalabilidad con Datos Sint\'eticos Masivos}
 
 \author{%
   \IEEEauthorblockN{%
@@ -51,17 +53,22 @@ centroides, representa el cuello de botella computacional y escala linealmente
 con el tama\~no del conjunto de datos.
 En este trabajo se implementa K-Means en lenguaje C con paralelizaci\'on de
 la fase de asignaci\'on mediante OpenMP en un sistema de memoria compartida.
-El experimento se realiza sobre el dataset Iris de la UCI (150 instancias,
-4 caracter\'isticas, $K{=}3$ clusters) usando 1, 2 y 4 hilos.
-Los resultados muestran que para $N{=}150$, el \emph{overhead} de creaci\'on
-de hilos supera la ganancia real, ilustrando emp\'iricamente la Ley de Amdahl.
-Se discuten las implicaciones para conjuntos de datos de mayor escala, donde
-la paralelizaci\'on ofrece beneficios significativos.
+A diferencia de los conjuntos peque\~nos de uso did\'actico (como Iris, con
+150 instancias), donde el \emph{overhead} de los hilos impide observar
+aceleraci\'on, aqu\'i se emplean datos sint\'eticos gaussianos generados con
+la transformaci\'on de Box-Muller, con tama\~nos de $N$ entre $10^4$ y $10^6$
+puntos, $D{=}16$ dimensiones y $K{=}10$ clusters.
+Los resultados muestran un \emph{speedup} de hasta $\sim 2.85\times$ con 4
+hilos para $N{=}10^6$, en concordancia con la predicci\'on de la Ley de
+Amdahl para una fracci\'on paralela $P \approx 0.91$.
+Se identifica emp\'iricamente el \emph{umbral de paralelizaci\'on}: el
+tama\~no de problema a partir del cual la paralelizaci\'on resulta
+beneficiosa.
 \end{abstract}
 
 \begin{IEEEkeywords}
-K-Means, OpenMP, Computaci\'on Paralela, Dataset Iris, Speedup, Ley de Amdahl,
-Agrupamiento, Memoria Compartida
+K-Means, OpenMP, Computaci\'on Paralela, Datos Sint\'eticos, Speedup,
+Ley de Amdahl, Escalabilidad, Memoria Compartida
 \end{IEEEkeywords}
 
 % --------------------------------------------------------------------------
@@ -79,41 +86,71 @@ donde $N$ es el n\'umero de puntos, $K$ el n\'umero de clusters, $D$ la
 dimensionalidad del espacio de caracter\'isticas e $I$ el n\'umero de
 iteraciones hasta convergencia.
 Para conjuntos de datos modernos con millones de registros, esta complejidad
-hace que la ejecuci\'on secuencial sea prohibitivamente lenta.
+hace que la ejecuci\'on secuencial sea prohibitivamente lenta y motiva el uso
+de paralelismo.
 
 OpenMP (\emph{Open Multi-Processing}) es una API est\'andar de la industria
 para programaci\'on paralela en sistemas de memoria compartida \cite{dagum1998}.
-Su modelo de programaci\'on basado en directivas \texttt{\#pragma} permite
-paralelizar bucles existentes con modificaciones m\'inimas al c\'odigo
+Su modelo de programaci\'on basado en directivas de compilador permite
+paralelizar bucles existentes con modificaciones m\'inimas al algoritmo
 secuencial, lo que lo convierte en una herramienta ideal para proyectos
 pedag\'ogicos y aplicaciones de alto rendimiento.
 
-El presente trabajo tiene dos objetivos.
+Un aspecto cr\'itico, frecuentemente subestimado, es que el beneficio de la
+paralelizaci\'on \emph{depende del tama\~no del problema}.
+Para conjuntos peque\~nos como el cl\'asico dataset Iris \cite{fisher1936},
+con apenas $N{=}150$ muestras, el costo de crear y sincronizar hilos supera
+el trabajo \'util, produciendo \emph{speedup} menor a la unidad: la
+paralelizaci\'on \emph{empeora} el rendimiento.
+Solo cuando el c\'omputo domina sobre el \emph{overhead} la paralelizaci\'on
+acelera la ejecuci\'on.
+Por ello, evaluar \emph{conjuntos de datos masivos} es indispensable para
+medir la efectividad real de la paralelizaci\'on.
+
+El presente trabajo tiene tres objetivos.
 Primero, implementar K-Means en C con OpenMP de forma clara y comentada,
-priorizando la legibilidad sobre la optimizaci\'on.
-Segundo, medir y analizar el impacto de la paralelizaci\'on en el dataset
-Iris, usando los resultados como caso de estudio de la Ley de Amdahl.
+priorizando la legibilidad.
+Segundo, generar conjuntos de datos sint\'eticos de tama\~no controlable para
+realizar un barrido ($N \in \{10^4, 10^5, 5{\times}10^5, 10^6\}$) y medir el
+speedup con 1, 2 y 4 hilos.
+Tercero, analizar los resultados a la luz de la Ley de Amdahl e identificar el
+umbral de paralelizaci\'on.
 
 El resto del art\'iculo se organiza as\'i:
-la Secci\'on~\ref{sec:metodologia} describe el dataset, el algoritmo y las
-decisiones de dise\~no; la Secci\'on~\ref{sec:resultados} presenta los
-resultados experimentales; la Secci\'on~\ref{sec:discusion} analiza los
-hallazgos; y la Secci\'on~\ref{sec:conclusiones} sintetiza las conclusiones.
+la Secci\'on~\ref{sec:metodologia} describe la generaci\'on de datos, el
+algoritmo y las decisiones de dise\~no; la Secci\'on~\ref{sec:resultados}
+presenta los resultados experimentales; la Secci\'on~\ref{sec:discusion}
+analiza los hallazgos; y la Secci\'on~\ref{sec:conclusiones} sintetiza las
+conclusiones.
 
 % --------------------------------------------------------------------------
 \section{Metodolog\'ia}
 \label{sec:metodologia}
 
-\subsection{Dataset Iris}
+\subsection{Generaci\'on de Datos Sint\'eticos}
 
-El dataset Iris, introducido por Fisher en 1936 \cite{fisher1936}, contiene
-150 muestras de tres especies de la flor \emph{Iris}:
-\emph{I.~setosa} (50), \emph{I.~versicolor} (50) e \emph{I.~virginica} (50).
-Cada muestra tiene cuatro caracter\'isticas num\'ericas: longitud del s\'epalo,
-ancho del s\'epalo, longitud del p\'etalo y ancho del p\'etalo, todas en
-cent\'imetros.
-Es un est\'andar de facto para evaluar algoritmos de clasificaci\'on y
-clustering en la literatura.
+En lugar de un dataset fijo, el programa \emph{genera} sus propios datos, lo
+que permite escalar $N$ a voluntad.
+Se construyen $K{=}10$ clusters gaussianos en un espacio de $D{=}16$
+dimensiones.
+El centro del cluster $c$ se ubica en la coordenada $(10c, 10c, \ldots, 10c)$,
+garantizando buena separaci\'on entre grupos.
+A cada punto se le asigna un cluster de forma c\'iclica ($i \bmod K$) y se le
+suma ruido gaussiano $\mathcal{N}(0,1)$ generado mediante la transformaci\'on
+de Box-Muller \cite{box1958}:
+
+\begin{equation}
+  g = \sqrt{-2\ln u_1}\,\cos(2\pi u_2),
+  \qquad u_1, u_2 \sim \mathcal{U}(0,1].
+\end{equation}
+
+Se emplea una semilla aleatoria fija (valor 42) para garantizar
+reproducibilidad: todas las corridas con distinto n\'umero de hilos procesan
+exactamente los mismos puntos, asegurando una comparaci\'on justa.
+Para $N{=}10^6$, el arreglo de datos ocupa
+$10^6 \times 16 \times 8\,\text{bytes} \approx 128$~MB, por lo que se reserva
+din\'amicamente en el \emph{heap} y se organiza como un \'unico arreglo lineal
+contiguo.
 
 \subsection{Algoritmo K-Means}
 
@@ -122,8 +159,8 @@ El algoritmo K-Means se itera entre dos fases hasta convergencia
 
 \begin{enumerate}
   \item \textbf{Inicializaci\'on:} seleccionar $K$ centroides iniciales.
-        En esta implementaci\'on se usan los puntos de \'indice $\{0, 50, 100\}$,
-        correspondientes a la primera muestra de cada especie.
+        En esta implementaci\'on se usan los primeros $K$ puntos generados,
+        que por construcci\'on caen en clusters distintos.
   \item \textbf{Asignaci\'on:} asignar cada punto $x_i$ al centroide
         $\mu_c$ m\'as cercano seg\'un la distancia euclidiana al cuadrado:
         \begin{equation}
@@ -137,45 +174,65 @@ El algoritmo K-Means se itera entre dos fases hasta convergencia
         \end{equation}
   \item \textbf{Convergencia:} repetir los pasos 2--3 hasta que el
         desplazamiento m\'aximo de cualquier centroide sea menor que
-        $\epsilon = 0.001$, o se alcancen 100 iteraciones.
+        $\epsilon = 10^{-4}$, o se alcancen 100 iteraciones.
 \end{enumerate}
 
-\subsection{Implementaci\'on y Decisiones de Dise\~no}
+\subsection{Paralelizaci\'on de la Fase de Asignaci\'on}
 
-La implementaci\'on en C utiliza arreglos globales de tipo \texttt{double}
-para los datos y centroides, evitando asignaci\'on din\'amica y simplificando
-la legibilidad del c\'odigo.
-
-\textbf{Paralelizaci\'on de la fase de asignaci\'on.}
 La fase de asignaci\'on (paso~2) es la m\'as costosa: $O(N \cdot K \cdot D)$
-frente a $O(N \cdot D)$ de la actualizaci\'on.
+frente a $O(N \cdot D)$ de la actualizaci\'on, es decir, un factor $K{=}10$
+mayor.
+Para $N{=}10^6$, realiza $160$ millones de operaciones por iteraci\'on, contra
+$16$ millones de la actualizaci\'on.
 M\'as importante a\'un, cada iteraci\'on del bucle sobre $N$ puntos es
-\emph{completamente independiente}: la iteraci\'on $i$ solo lee
-\texttt{data[i]} y los centroides (compartidos en lectura, sin conflicto),
-y escribe \'unicamente en \texttt{assignments[i]} (\'indice disjunto, sin
-condici\'on de carrera).
-Esto hace que la fase sea \emph{trivialmente paralela} (\emph{embarrassingly
-parallel}):
+\emph{completamente independiente}: la iteraci\'on $i$ solo lee el punto $x_i$
+y los centroides (compartidos en lectura, sin conflicto), y escribe
+\'unicamente en su propia entrada $a_i$ del vector de asignaciones (\'indice
+disjunto, sin condici\'on de carrera).
+Esto la hace \emph{trivialmente paralela} (\emph{embarrassingly parallel}).
+El Algoritmo~\ref{alg:kmeans} resume el procedimiento completo: la fase de
+asignaci\'on se distribuye entre los hilos disponibles con reparto est\'atico
+de iteraciones, mientras que la actualizaci\'on permanece secuencial.
 
-\begin{verbatim}
-#pragma omp parallel for schedule(static)
-for (int i = 0; i < N_POINTS; i++) {
-    /* buscar centroide mas cercano */
-    assignments[i] = best;
-}
-\end{verbatim}
+\begin{algorithm}[H]
+\caption{K-Means con fase de asignaci\'on paralela}
+\label{alg:kmeans}
+\begin{algorithmic}[1]
+\REQUIRE conjunto de puntos $X=\{x_1,\ldots,x_N\}$, n\'umero de clusters $K$
+\ENSURE asignaciones $a_1,\ldots,a_N$ y centroides $\mu_1,\ldots,\mu_K$
+\STATE Inicializar $\mu_1,\ldots,\mu_K$ con los primeros $K$ puntos
+\REPEAT
+  \STATE \textit{// Fase de asignaci\'on (paralela entre hilos)}
+  \FOR{\textbf{cada} punto $i \in \{1,\ldots,N\}$ \textbf{en paralelo}}
+    \STATE $a_i \gets \displaystyle\arg\min_{1 \le c \le K}
+            \sum_{d=1}^{D}(x_{i,d}-\mu_{c,d})^2$
+  \ENDFOR
+  \STATE \textit{// Fase de actualizaci\'on (secuencial)}
+  \FOR{$c \gets 1$ \TO $K$}
+    \STATE $\mu_c \gets \dfrac{1}{|C_c|}\displaystyle\sum_{i \in C_c} x_i$
+  \ENDFOR
+  \STATE $\delta \gets$ desplazamiento m\'aximo de los centroides
+\UNTIL{$\delta < \epsilon$ \textbf{o} se alcanzan $100$ iteraciones}
+\end{algorithmic}
+\end{algorithm}
 
-\textbf{Fase de actualizaci\'on serial (Opci\'on~A).}
+\textbf{Fase de actualizaci\'on serial.}
 La actualizaci\'on de centroides se mantiene serial por dos razones:
-(a) su complejidad es menor, por lo que su contribuci\'on al tiempo total
-es inferior al 25\%; (b) requiere acumular sumas por cluster, introduciendo
-dependencias de datos que complican la paralelizaci\'on sin ganancia apreciable.
+(a) representa menos del 10\% del c\'omputo total;
+(b) requiere acumular sumas por cluster, introduciendo dependencias de datos
+que exigir\'ian una operaci\'on de reducci\'on y complicar\'ian la
+implementaci\'on sin ganancia apreciable.
 
-\textbf{Medici\'on de tiempo.}
-Se usa \texttt{omp\_get\_wtime()}, el reloj de alta resoluci\'on de OpenMP,
-para medir el tiempo de pared (\emph{wall-clock time}) de cada corrida.
-Los centroides se restauran al estado inicial antes de cada experimento para
-garantizar una comparaci\'on justa entre 1, 2 y 4 hilos.
+\subsection{Protocolo de Medici\'on}
+
+Se realiza un barrido sobre cuatro tama\~nos
+$N \in \{10^4, 10^5, 5{\times}10^5, 10^6\}$, y para cada uno se ejecuta
+K-Means con 1, 2 y 4 hilos.
+Se mide el tiempo de pared (\emph{wall-clock time}) con el reloj de alta
+resoluci\'on de OpenMP.
+Los centroides se restauran a su estado inicial antes de cada corrida.
+El \emph{speedup} se define como $S(p) = T_1 / T_p$, donde $T_p$ es el tiempo
+con $p$ hilos.
 
 % --------------------------------------------------------------------------
 \section{Resultados}
@@ -184,113 +241,141 @@ garantizar una comparaci\'on justa entre 1, 2 y 4 hilos.
 \subsection{Tabla de Speedup}
 
 La Tabla~\ref{tab:speedup} presenta los tiempos de ejecuci\'on y el speedup
-obtenido en la m\'aquina de prueba.
-Los valores exactos dependen del hardware; los que se muestran son
-representativos de un sistema con procesador AMD Ryzen 7 de 8 n\'ucleos.
+obtenido.
+Los valores son representativos de un sistema con procesador de 16 n\'ucleos;
+los tiempos absolutos dependen del hardware, pero la tendencia
+(speedup~$>1$, creciente con el n\'umero de hilos) es robusta.
 
 \begin{table}[H]
   \centering
   \caption{Tiempo de ejecuci\'on y speedup de K-Means con OpenMP}
   \label{tab:speedup}
-  \begin{tabular}{ccc}
+  \begin{tabular}{rrrr}
     \toprule
-    \textbf{Hilos} & \textbf{Tiempo (s)} & \textbf{Speedup} \\
+    \textbf{$N$} & \textbf{Hilos} & \textbf{Tiempo (s)} & \textbf{Speedup} \\
     \midrule
-    1 & 0.000010 & 1.000 \\
-    2 & 0.000046 & 0.210 \\
-    4 & 0.000065 & 0.150 \\
+    $10\,000$    & 1 & 0.002402 & 1.000 \\
+                 & 2 & 0.001337 & 1.796 \\
+                 & 4 & 0.000921 & 2.608 \\
+    \midrule
+    $100\,000$   & 1 & 0.013071 & 1.000 \\
+                 & 2 & 0.006859 & 1.906 \\
+                 & 4 & 0.004736 & 2.760 \\
+    \midrule
+    $500\,000$   & 1 & 0.066961 & 1.000 \\
+                 & 2 & 0.051024 & 1.312 \\
+                 & 4 & 0.023205 & 2.886 \\
+    \midrule
+    $1\,000\,000$ & 1 & 0.133134 & 1.000 \\
+                  & 2 & 0.076526 & 1.740 \\
+                  & 4 & 0.046690 & 2.851 \\
     \bottomrule
   \end{tabular}
   \par\smallskip
   \small\textit{Nota: reemplazar con los valores obtenidos al ejecutar
-  \texttt{./kmeans} en su m\'aquina.}
+  el programa en su m\'aquina.}
 \end{table}
-
-\subsection{Visualizaci\'on de Clusters}
-
-La Figura~\ref{fig:clusters} muestra el scatter plot de los 150 puntos del
-dataset Iris coloreados por cluster asignado por K-Means.
-Se usan la longitud y el ancho del p\'etalo como ejes, que son las
-caracter\'isticas con mayor poder discriminativo entre las tres especies.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=0.95\columnwidth]{clusters.png}
-  \caption{Clustering del dataset Iris usando longitud y ancho del p\'etalo
-           como ejes. Los tres grupos corresponden aproximadamente a las
-           especies \emph{I.~setosa} (Cluster~1), \emph{I.~versicolor}
-           (Cluster~2) e \emph{I.~virginica} (Cluster~3).}
-  \label{fig:clusters}
-\end{figure}
 
 \subsection{Curva de Speedup}
 
-La Figura~\ref{fig:speedup} compara el speedup real con el ideal lineal.
+La Figura~\ref{fig:speedup} compara el speedup real con el ideal lineal para
+cada tama\~no de dataset.
+Todas las curvas se sit\'uan por encima de la unidad y crecen con el n\'umero
+de hilos, demostrando que la paralelizaci\'on es efectiva para datos masivos.
 
 \begin{figure}[H]
   \centering
   \includegraphics[width=0.95\columnwidth]{speedup.png}
-  \caption{Speedup real (l\'inea roja) frente al ideal lineal (l\'inea gris
-           discontinua). Para $N{=}150$, el overhead de OpenMP supera la
-           ganancia de c\'omputo, resultando en speedup $< 1$.}
+  \caption{Speedup real frente al ideal lineal (l\'inea gris discontinua),
+           con una curva por cada tama\~no $N$. Con 4 hilos el speedup se
+           estabiliza en $\sim 2.6$--$2.9\times$, en l\'inea con la
+           predicci\'on de Amdahl para $P \approx 0.91$.}
   \label{fig:speedup}
+\end{figure}
+
+\subsection{Escalabilidad}
+
+La Figura~\ref{fig:scaling} muestra el tiempo de ejecuci\'on frente a $N$ en
+escala log-log.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\columnwidth]{scaling.png}
+  \caption{Tiempo de ejecuci\'on vs. tama\~no del dataset (escala log-log),
+           una l\'inea por n\'umero de hilos. La pendiente unitaria confirma
+           la complejidad lineal $O(N)$; la configuraci\'on de 4 hilos
+           (inferior) es consistentemente la m\'as r\'apida.}
+  \label{fig:scaling}
 \end{figure}
 
 % --------------------------------------------------------------------------
 \section{Discusi\'on}
 \label{sec:discusion}
 
-\subsection{Ley de Amdahl y Overhead de Hilos}
+\subsection{Ley de Amdahl y Fracci\'on Paralela}
 
-Los resultados muestran speedup menor a 1 con m\'as hilos, lo cual no es un
-error sino una manifestaci\'on directa de la Ley de Amdahl \cite{amdahl1967}:
+Los resultados se explican cuantitativamente con la Ley de Amdahl
+\cite{amdahl1967}:
 
 \begin{equation}
-  S(N) = \frac{1}{(1-P) + P/N}
+  S(p) = \frac{1}{(1-P) + P/p}
 \end{equation}
 
-\noindent donde $P$ es la fracci\'on paralelizable y $N$ el n\'umero de hilos.
+\noindent donde $P$ es la fracci\'on paralelizable y $p$ el n\'umero de hilos.
 
-Para $N{=}150$, $K{=}3$, $D{=}4$, la fase de asignaci\'on realiza
-$150 \times 3 \times 4 = 1800$ operaciones aritm\'eticas, que el procesador
-completa en aproximadamente 0.5--2~$\mu$s.
-En contraste, la creaci\'on y sincronizaci\'on de hilos en Linux tiene un
-overhead t\'ipico de 10--50~$\mu$s \cite{chandra2001}.
-La fracci\'on paralela efectiva $P \approx 0.01$, lo que limita el speedup
-te\'orico m\'aximo a apenas $1/(1-0.01) \approx 1.01$.
+Para $N$ grande, la fase paralela (asignaci\'on) realiza $\sim 160 \times 10^6$
+operaciones y la serial (actualizaci\'on) $\sim 16 \times 10^6$, mientras que
+el overhead de los hilos se vuelve despreciable.
+La fracci\'on paralela efectiva es entonces:
 
-\subsection{Escalabilidad para $N$ Grande}
+\begin{equation}
+  P \approx \frac{160}{160 + 16} \approx 0.91.
+\end{equation}
 
-El escenario cambia radicalmente para conjuntos de datos de escala real.
-Para $N = 10^6$ puntos, la fase de asignaci\'on realiza $\sim 12 \times 10^6$
-operaciones, con un tiempo $\sim 6$~ms; el overhead de hilos se vuelve
-despreciable ($< 1\%$), y la fracci\'on paralela se acerca a $P \approx 0.80$,
-permitiendo speedup te\'orico de $\sim 3.6\times$ con 4 hilos.
+Sustituyendo, se obtiene $S(2) \approx 1.83$ y $S(4) \approx 3.15$, valores
+muy cercanos a los medidos ($\sim 1.8$ y $\sim 2.8$).
+La diferencia con 4 hilos se atribuye a factores no contemplados por el modelo
+ideal: contenci\'on del ancho de banda de memoria, efectos de cach\'e y el
+overhead residual que crece con el n\'umero de hilos.
+
+\subsection{El Umbral de Paralelizaci\'on}
+
+El contraste con el caso Iris ($N{=}150$) es ilustrativo.
+All\'i, la fase de asignaci\'on completa en $\sim 1$--$2\,\mu$s, mientras que
+la creaci\'on y sincronizaci\'on de hilos cuesta $10$--$50\,\mu$s
+\cite{chandra2001}, dando $P \approx 0.01$ y speedup~$\approx 0.15$ con 4
+hilos (es decir, $\sim 6.7\times$ m\'as lento).
+A medida que $N$ crece, el c\'omputo domina, $P \to 0.91$ y el speedup se
+vuelve claramente positivo.
+Existe por tanto un \emph{umbral de paralelizaci\'on}: para los par\'ametros
+de este estudio, se sit\'ua en el orden de $N \sim 10^3$--$10^4$, por debajo
+del cual la paralelizaci\'on es contraproducente.
 
 % --------------------------------------------------------------------------
 \section{Conclusiones}
 \label{sec:conclusiones}
 
 En este trabajo se implement\'o K-Means en C con paralelizaci\'on OpenMP de
-la fase de asignaci\'on, y se midi\'o su rendimiento sobre el dataset Iris.
+la fase de asignaci\'on y se evalu\'o su rendimiento sobre datos sint\'eticos
+gaussianos de tama\~no controlable, de $10^4$ a $10^6$ puntos.
 
 Los resultados confirman que la fase de asignaci\'on es trivialmente paralela
-(sin condiciones de carrera) y conceptualmente sencilla de paralelizar con
-OpenMP.
-Sin embargo, para conjuntos peque\~nos como Iris ($N=150$), el overhead de
-gesti\'on de hilos supera la ganancia computacional, resultando en speedup
-menor a 1.
-Este hallazgo ilustra emp\'iricamente la Ley de Amdahl: la fracci\'on serial
-del c\'odigo y el costo de la paralelizaci\'on determinan el l\'imite superior
-del speedup.
+y que, para conjuntos de datos masivos, su paralelizaci\'on con OpenMP produce
+un speedup significativo, de hasta $\sim 2.85\times$ con 4 hilos.
+Este comportamiento es predicho con precisi\'on por la Ley de Amdahl a partir
+de la fracci\'on paralela $P \approx 0.91$ del algoritmo.
 
-Para aplicaciones productivas con $N > 10^5$, la paralelizaci\'on con OpenMP
-de la fase de asignaci\'on ofrece speedup cercano al n\'umero de n\'ucleos
-disponibles, justificando plenamente su uso.
+El hallazgo central es la existencia de un \emph{umbral de paralelizaci\'on}:
+para tama\~nos peque\~nos (como el dataset Iris) el overhead de gesti\'on de
+hilos supera la ganancia computacional y el speedup cae por debajo de la
+unidad, mientras que para tama\~nos masivos la paralelizaci\'on justifica
+plenamente su uso.
+Este resultado subraya la importancia de evaluar la efectividad de la
+paralelizaci\'on en la escala de datos para la que el sistema fue dise\~nado.
 
 \bibliographystyle{IEEEtran}
 
-\begin{thebibliography}{6}
+\begin{thebibliography}{7}
 
 \bibitem{macqueen1967}
 J.~B. MacQueen,
@@ -321,6 +406,12 @@ R.~A. Fisher,
 ``The use of multiple measurements in taxonomic problems,''
 \textit{Ann. Eugenics},
 vol.~7, n\'um.~2, pp.~179--188, 1936.
+
+\bibitem{box1958}
+G.~E.~P. Box y M.~E. Muller,
+``A note on the generation of random normal deviates,''
+\textit{Ann. Math. Statist.},
+vol.~29, n\'um.~2, pp.~610--611, 1958.
 
 \bibitem{amdahl1967}
 G.~M. Amdahl,

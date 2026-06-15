@@ -1,75 +1,139 @@
 # Guía de Estudio: K-Means Paralelo con OpenMP
 ### Explicado desde cero, para alguien que nunca lo ha visto
 
-**Proyecto:** K-Means Clustering paralelizado con OpenMP — Dataset Iris  
+**Proyecto:** K-Means Clustering paralelizado con OpenMP — Dataset sintético masivo  
 **Nivel:** Sin conocimiento previo de K-Means ni de paralelismo
 
 ---
 
 ## Tabla de Contenidos
 
-- [Parte 0 — El Dataset Iris: de qué estamos hablando](#parte-0--el-dataset-iris-de-qué-estamos-hablando)
+- [Parte 0 — Los datos: de qué estamos hablando](#parte-0--los-datos-de-qué-estamos-hablando)
+- [Parte 0.5 — Por qué Iris no basta: el problema de escala](#parte-05--por-qué-iris-no-basta-el-problema-de-escala)
 - [Parte 1 — K-Means desde cero](#parte-1--k-means-desde-cero)
 - [Parte 2 — Cómputo paralelo desde cero](#parte-2--cómputo-paralelo-desde-cero)
 - [Parte 3 — OpenMP desde cero](#parte-3--openmp-desde-cero)
 - [Parte 4 — El código C explicado línea a línea](#parte-4--el-código-c-explicado-línea-a-línea)
 - [Parte 5 — ¿Por qué solo paralelizamos la asignación?](#parte-5--por-qué-solo-paralelizamos-la-asignación)
-- [Parte 6 — ¿Por qué el speedup es menor a 1?](#parte-6--por-qué-el-speedup-es-menor-a-1)
+- [Parte 6 — El speedup: por qué ahora sí funciona](#parte-6--el-speedup-por-qué-ahora-sí-funciona)
 - [Parte 7 — Compilar y ejecutar](#parte-7--compilar-y-ejecutar)
 - [Parte 8 — Gráficas con Gnuplot](#parte-8--gráficas-con-gnuplot)
 - [Parte 9 — Glosario completo](#parte-9--glosario-completo)
 
 ---
 
-## Parte 0 — El Dataset Iris: de qué estamos hablando
+## Parte 0 — Los datos: de qué estamos hablando
 
 ### ¿Qué son "datos"?
 
 Antes de hablar de algoritmos, hay que entender con qué trabajamos.
 
-Un **dato** es simplemente información que podemos medir y escribir como número. Por ejemplo, si quisieras describir una flor con números, podrías medir:
+Un **dato** es simplemente información que podemos medir y escribir como número. Por ejemplo, si quisieras describir una flor con números, podrías medir el largo y ancho de su sépalo y de su pétalo: 4 medidas. Ese es el famoso **dataset Iris**: 150 flores, cada una con 4 medidas. Es el "hola mundo" del clustering y lo usaremos como **analogía didáctica** a lo largo de esta guía porque es fácil de imaginar.
 
-- Cuánto mide el sépalo (la parte verde que rodea el pétalo) en largo
-- Cuánto mide el sépalo en ancho
-- Cuánto mide el pétalo en largo
-- Cuánto mide el pétalo en ancho
+Pero hay un problema: **150 flores es ridículamente poco** para medir si la paralelización sirve (lo explicamos en la [Parte 0.5](#parte-05--por-qué-iris-no-basta-el-problema-de-escala)). Por eso este proyecto **no carga Iris desde un archivo**: en su lugar **genera datos sintéticos** — puntos artificiales creados por el propio programa — y puede generar tantos como queramos: 10 mil, 100 mil, ¡hasta 1 millón!
 
-Eso es exactamente lo que tiene el dataset Iris: **150 flores**, cada una descrita con **4 medidas** en centímetros.
+### ¿Qué es un punto y qué es una dimensión?
 
-### Cómo se ve el archivo iris.csv
+Olvidemos las flores por un momento y pensemos en general.
 
-El archivo `iris.csv` es una tabla de texto plano. Las primeras 5 líneas se ven así:
+- Un **punto** es una cosa que queremos agrupar (una flor, un cliente, un píxel...).
+- Una **dimensión** es una medida de ese punto (largo del pétalo, edad del cliente, color del píxel...).
+
+Si un punto tiene 2 dimensiones, lo podemos dibujar en una hoja de papel (eje X, eje Y). Si tiene 3, en un cubo. Si tiene 16 dimensiones — como en este proyecto — ya no lo podemos dibujar, pero la matemática funciona exactamente igual: solo son 16 números por punto.
+
+En este proyecto cada punto tiene:
+- **D = 16 dimensiones** (16 medidas numéricas por punto)
+- Pertenece a uno de **K = 10 grupos** (clusters)
+
+### Cómo se generan los datos sintéticos
+
+En lugar de leer un CSV, el programa **fabrica** los puntos con la función `generate_dataset()`. La idea es sencilla:
+
+1. Queremos K = 10 grupos. Le damos a cada grupo un "centro" diferente: el grupo 0 vive cerca de la coordenada `(0, 0, ..., 0)`, el grupo 1 cerca de `(10, 10, ..., 10)`, el grupo 2 cerca de `(20, 20, ..., 20)`, etc.
+2. Para cada punto, elegimos a qué grupo pertenece y lo colocamos **cerca** del centro de ese grupo, pero no exactamente encima: le sumamos un poco de **ruido aleatorio** (una pequeña desviación al azar).
+
+El resultado son 10 "nubes" de puntos bien separadas. Justo lo que K-Means debe redescubrir.
+
+### ¿Qué es el "ruido gaussiano" y Box-Muller?
+
+El ruido que sumamos sigue una **distribución gaussiana** (la famosa "campana de Gauss"): valores cercanos a cero son muy probables, valores grandes son raros. Es el ruido más natural: si midieras la misma flor 1000 veces con una regla, tus errores formarían una campana.
+
+El problema es que la función `rand()` de C solo da números **uniformes** (todos igual de probables entre 0 y 1), no gaussianos. Para convertir uniformes en gaussianos usamos la **transformación de Box-Muller**, una fórmula matemática que toma dos números uniformes `u1, u2` y produce un número gaussiano `g`:
 
 ```
-5.1,3.5,1.4,0.2,Iris-setosa
-4.9,3.0,1.4,0.2,Iris-setosa
-4.7,3.2,1.3,0.2,Iris-setosa
-4.6,3.1,1.5,0.2,Iris-setosa
-5.0,3.6,1.4,0.2,Iris-setosa
+g = √(-2 · ln(u1)) · cos(2π · u2)
 ```
 
-Cada línea es una flor. Las columnas son:
+No hace falta entender la fórmula a fondo; basta saber que **convierte aleatoriedad uniforme en aleatoriedad con forma de campana**, que es lo que necesitamos para que cada grupo sea una nube realista.
 
-| Columna 1 | Columna 2 | Columna 3 | Columna 4 | Columna 5 |
-|-----------|-----------|-----------|-----------|-----------|
-| largo_sépalo | ancho_sépalo | largo_pétalo | ancho_pétalo | especie |
-| 5.1 | 3.5 | 1.4 | 0.2 | Iris-setosa |
+### Semilla fija: experimentos reproducibles
 
-### Las 3 especies
+El programa llama a `srand(42)` antes de generar los datos. La **semilla** (`42`) hace que la secuencia de números "aleatorios" sea siempre la misma. Así, cada vez que ejecutas el programa obtienes **exactamente los mismos datos**, y las comparaciones de tiempo entre 1, 2 y 4 hilos son justas (todos procesan los mismos puntos).
 
-El dataset tiene exactamente 150 flores divididas en 3 grupos de 50:
+### Lo importante: K-Means IGNORA a qué grupo pertenece cada punto
 
-- **Filas 1-50:** Iris-setosa (pétalos muy pequeños)
-- **Filas 51-100:** Iris-versicolor (pétalos medianos)
-- **Filas 101-150:** Iris-virginica (pétalos grandes)
+Aunque nosotros **sabemos** a qué grupo pusimos cada punto al generarlo, K-Means **no lo usa**. Le damos solo los 16 números de cada punto y le preguntamos: *¿puedes encontrar las 10 nubes tú solo?*
 
-La columna 5 (la especie) se llama **etiqueta**: es la respuesta "correcta" de a qué grupo pertenece cada flor.
+Eso se llama **aprendizaje no supervisado**: aprender sin que alguien te dé las respuestas correctas. (Con Iris sería lo mismo: K-Means no ve la columna "especie".)
 
-### Lo importante: K-Means IGNORA las etiquetas
+---
 
-El algoritmo K-Means solo usa las **4 columnas numéricas**. No le decimos "esta flor es setosa". Le damos solo los números y le preguntamos: *¿puedes encontrar grupos naturales tú solo?*
+## Parte 0.5 — Por qué Iris no basta: el problema de escala
 
-Eso se llama **aprendizaje no supervisado**: aprender sin que alguien te dé las respuestas correctas.
+### El enunciado del proyecto
+
+El proyecto pedía: *"Algoritmo de K-Means Clustering. Optimización de la fase de asignación de centroides para conjuntos de datos masivos."*
+
+La palabra clave es **masivos**. El dataset Iris tiene 150 puntos. Eso **no es masivo** — es minúsculo. Y resulta que con datos minúsculos la paralelización no solo no ayuda: **hace el programa más lento**.
+
+### La intuición: contratar albañiles para un solo ladrillo
+
+Imagina que tienes que poner un ladrillo. Lo haces tú solo en 2 segundos.
+
+Ahora imagina que, para "ir más rápido", llamas a 4 albañiles. Tienes que:
+1. Llamarlos por teléfono (tardan en llegar)
+2. Explicarles la tarea
+3. Repartir... ¿un solo ladrillo entre 4 personas?
+4. Esperar a que todos digan "listo"
+5. Despedirlos
+
+Todo ese trámite tarda **mucho más** que los 2 segundos de poner el ladrillo tú mismo. Has hecho el trabajo **más lento** por usar más trabajadores.
+
+Eso es exactamente lo que pasa con N = 150: el trabajo real (calcular distancias de 150 puntos) tarda menos de lo que cuesta **crear, coordinar y destruir** los hilos.
+
+### Los números del problema original (Iris, N=150)
+
+Con el proyecto original en Iris, las mediciones daban algo así:
+
+```
+1 hilo  → speedup = 1.00  (referencia)
+2 hilos → speedup ≈ 0.21  (¡5 veces MÁS LENTO!)
+4 hilos → speedup ≈ 0.15  (¡6.7 veces MÁS LENTO!)
+```
+
+El `speedup` es "cuántas veces más rápido". Un speedup **menor a 1** significa que empeoramos. Con Iris, paralelizar es contraproducente.
+
+### La solución: datos masivos sintéticos
+
+Para que la fase de asignación realmente domine el tiempo —y la paralelización valga la pena— necesitamos **muchos** puntos. Por eso generamos datos sintéticos con N de 10.000 a 1.000.000.
+
+Con N grande, el cálculo de distancias se vuelve tan pesado que el trámite de los hilos se vuelve insignificante en comparación. Ahí sí, repartir el trabajo entre cores hace el programa **realmente más rápido**:
+
+```
+N = 1.000.000:
+1 hilo  → speedup = 1.00
+2 hilos → speedup ≈ 1.74
+4 hilos → speedup ≈ 2.85   ¡Casi 3 veces más rápido!
+```
+
+### El concepto clave: el umbral de paralelización
+
+Existe un **tamaño mínimo de problema** por debajo del cual paralelizar no compensa, y por encima del cual sí. A ese punto de equilibrio lo llamamos **umbral de paralelización**.
+
+- **Por debajo del umbral** (datos pequeños): el *overhead* de los hilos domina → speedup < 1 → la paralelización empeora.
+- **Por encima del umbral** (datos masivos): el cómputo domina → speedup > 1 → la paralelización ayuda.
+
+Toda esta guía gira en torno a **demostrar empíricamente dónde está ese umbral** y por qué existe. La Ley de Amdahl (Parte 6) lo formaliza con matemáticas.
 
 ---
 
@@ -101,15 +165,15 @@ distancia = √( (4.7 - 1.4)² + (1.4 - 0.2)² )
 
 Visualmente: es la línea recta que une esos dos puntos en un gráfico.
 
-**En 4D (cuatro medidas):**
+**En D dimensiones (en nuestro código, D=16):**
 
-Con 4 características, el principio es el mismo, solo se suman 4 términos:
+Con D características, el principio es el mismo, solo se suman D términos:
 
 ```
-distancia = √( (x₁-y₁)² + (x₂-y₂)² + (x₃-y₃)² + (x₄-y₄)² )
+distancia = √( (x₁-y₁)² + (x₂-y₂)² + ... + (x_D-y_D)² )
 ```
 
-No podemos visualizarlo en 4 dimensiones, pero la matemática funciona igual.
+No podemos visualizar 16 dimensiones, pero la matemática funciona igual. En este proyecto cada punto tiene 16 dimensiones, así que sumamos 16 términos. (Con el dataset Iris serían 4.)
 
 **¿Por qué usamos el cuadrado de la distancia en el código?**
 
@@ -198,7 +262,7 @@ Nuevo C2 = promedio(F4, F5, F6) = ((4.5+4.8+4.6)/3, (1.5+1.4+1.6)/3)
          = (4.633, 1.5)
 ```
 
-**¿Convergió?** El centroide C1 se movió de (1.0, 0.2) a (1.1, 0.233). Desplazamiento = 0.1. Como 0.1 > 0.001 (nuestro umbral), continuamos.
+**¿Convergió?** El centroide C1 se movió de (1.0, 0.2) a (1.1, 0.233). Desplazamiento = 0.1. Como 0.1 > 0.0001 (nuestro umbral, `THRESHOLD`), continuamos.
 
 Después de otra iteración, los centroides se estabilizan y el programa para. Eso es convergencia.
 
@@ -236,17 +300,19 @@ Un **hilo** (thread en inglés) es una "sub-tarea" dentro de un proceso. A difer
 Imagina un proceso como una oficina y los hilos como los empleados. Todos trabajan en la misma oficina (comparten los archivos, las calculadoras, la fotocopiadora), pero cada uno tiene su propio escritorio (su propia pila de trabajo actual).
 
 En nuestro programa:
-- El proceso tiene la tabla `data[150][4]` en memoria
+- El proceso tiene la tabla `data` (hasta 1.000.000 × 16 números) en memoria
 - Cuando creamos 4 hilos, los 4 pueden leer esa tabla sin copiarla
-- Eso es eficiente: no gastamos tiempo copiando 150 flores para cada hilo
+- Eso es eficiente: no gastamos tiempo copiando millones de puntos para cada hilo
 
 ### 2.4 ¿Qué es paralelismo?
 
 **Paralelismo** es hacer varias cosas al mismo tiempo, en cores distintos de la CPU.
 
+Supongamos N = 1.000.000 puntos.
+
 Sin paralelismo (serial):
 ```
-Core 0: Flor 1 → Flor 2 → Flor 3 → ... → Flor 150
+Core 0: Punto 1 → Punto 2 → Punto 3 → ... → Punto 1.000.000
 Core 1: inactivo
 Core 2: inactivo
 Core 3: inactivo
@@ -254,13 +320,13 @@ Core 3: inactivo
 
 Con paralelismo (4 hilos):
 ```
-Core 0: Flor 1  → Flor 2  → ... → Flor 37   (flores 1-37)
-Core 1: Flor 38 → Flor 39 → ... → Flor 75   (flores 38-75)
-Core 2: Flor 76 → Flor 77 → ... → Flor 112  (flores 76-112)
-Core 3: Flor 113→ Flor 114→ ... → Flor 150  (flores 113-150)
+Core 0: Puntos 1        → ... → 250.000
+Core 1: Puntos 250.001  → ... → 500.000
+Core 2: Puntos 500.001  → ... → 750.000
+Core 3: Puntos 750.001  → ... → 1.000.000
 ```
 
-Si cada flor tarda el mismo tiempo, el resultado es ~4 veces más rápido. En teoría.
+Si cada punto tarda el mismo tiempo, el resultado es ~4 veces más rápido. En teoría (en la práctica veremos ~2.8x, por las razones de la Parte 6).
 
 ### 2.5 El problema de compartir datos: race conditions
 
@@ -304,7 +370,7 @@ Crear hilos no es gratis. El sistema operativo necesita:
 
 Todo esto toma tiempo: típicamente entre 10 y 50 microsegundos por hilo. Eso suena poco, pero si el trabajo que vas a paralelizar solo dura 1 microsegundo, estás gastando 10-50x más tiempo en preparativos que en trabajo real.
 
-Esto explica por qué en nuestro proyecto con N=150 flores, usar más hilos hace el programa **más lento**, no más rápido.
+Esto explica el **umbral de paralelización** de la Parte 0.5: con datos pequeños (como Iris, N=150) el overhead hace el programa **más lento**. Solo cuando el trabajo es masivo (N de cientos de miles o millones) el cómputo supera al overhead y la paralelización **acelera** de verdad. Por eso este proyecto genera datos sintéticos a gran escala.
 
 ---
 
@@ -328,7 +394,7 @@ Un `#pragma` es una instrucción al compilador que no afecta la lógica del prog
 
 ```c
 #pragma omp parallel for
-for (int i = 0; i < 150; i++) {
+for (int i = 0; i < n; i++) {
     /* código */
 }
 ```
@@ -385,12 +451,12 @@ Esta es la directiva más importante de nuestro código. Vamos parte por parte:
 
 - **static** = división estática en bloques iguales, asignados antes de empezar.
 
-Con 4 hilos y 150 iteraciones:
+Con 4 hilos y 1.000.000 de iteraciones:
 ```
-Hilo 0 → iteraciones i = 0, 1, 2, ..., 37   (37-38 iteraciones)
-Hilo 1 → iteraciones i = 38, 39, ..., 75
-Hilo 2 → iteraciones i = 76, 77, ..., 112
-Hilo 3 → iteraciones i = 113, 114, ..., 149
+Hilo 0 → iteraciones i = 0          ... 249.999
+Hilo 1 → iteraciones i = 250.000    ... 499.999
+Hilo 2 → iteraciones i = 500.000    ... 749.999
+Hilo 3 → iteraciones i = 750.000    ... 999.999
 ```
 
 Cada hilo trabaja en su rango sin pisarse con los demás.
@@ -403,7 +469,7 @@ Cada hilo trabaja en su rango sin pisarse con los demás.
 | dynamic | Iteraciones asignadas "al vuelo" | Cuando algunas tardan más que otras |
 | guided | Bloques grandes al inicio, pequeños al final | Mezcla balanceada |
 
-Para K-Means, cada flor tarda exactamente el mismo tiempo en procesar, así que `static` es perfecto.
+Para K-Means, cada punto tarda exactamente el mismo tiempo en procesar (siempre se compara contra los mismos K centroides), así que `static` es perfecto y además evita el pequeño overhead de repartir trabajo "al vuelo" de `dynamic`.
 
 ### 3.6 Variables privadas vs compartidas
 
@@ -413,18 +479,18 @@ En una zona paralela, las variables pueden ser:
 
 ```c
 // FUERA del #pragma → compartidas → todos los hilos las ven
-double data[150][4];      // todos los hilos leen esto
-int assignments[150];     // cada hilo escribe en su propio índice
-double centroids[3][4];   // todos los hilos leen esto
+double *data;          // todos los hilos leen esto (n × 16 números)
+int    *assignments;   // cada hilo escribe en su propio índice
+double *centroids;     // todos los hilos leen esto (10 × 16 números)
 ```
 
 **Privadas (private):** Cada hilo tiene su propia copia. Las variables declaradas **dentro** del bucle son privadas automáticamente.
 
 ```c
 #pragma omp parallel for schedule(static)
-for (int i = 0; i < N_POINTS; i++) {
-    double min_dist = 1e18;  // ← PRIVADA: cada hilo tiene su propia min_dist
-    int    best     = 0;     // ← PRIVADA: cada hilo tiene su propio best
+for (int i = 0; i < n; i++) {
+    double min_dist = 1e300;  // ← PRIVADA: cada hilo tiene su propia min_dist
+    int    best     = 0;      // ← PRIVADA: cada hilo tiene su propio best
     // ...
 }
 ```
@@ -447,7 +513,7 @@ Es como presionar "inicio" y "fin" en un cronómetro. La ventaja sobre `clock()`
 ### 3.8 Por qué `-fopenmp` al compilar
 
 ```bash
-gcc -O2 -fopenmp -o kmeans kmeans.c -lm
+gcc -O2 -fopenmp -o kmeans src/kmeans.c -lm
 ```
 
 Sin `-fopenmp`:
@@ -467,409 +533,302 @@ Con `-fopenmp`:
 ### 4.1 Las cabeceras (`#include`)
 
 ```c
-#include <stdio.h>    // entrada/salida: printf, fprintf, fscanf, fopen, fclose
-#include <stdlib.h>   // funciones de sistema: exit()
-#include <math.h>     // funciones matemáticas: fabs() (valor absoluto)
-#include <omp.h>      // funciones de OpenMP: omp_get_wtime(), omp_set_num_threads()
+#include <stdio.h>    // entrada/salida: printf, fprintf, fopen, fclose
+#include <stdlib.h>   // memoria y sistema: malloc, free, rand, srand, exit
+#include <string.h>   // memcpy, memset (copiar y poner a cero bloques de memoria)
+#include <math.h>     // funciones matemáticas: sqrt, log, cos, fabs, M_PI
+#include <omp.h>      // OpenMP: omp_get_wtime(), omp_set_num_threads()
 ```
 
-Un `#include` es como decirle al compilador: "necesito usar funciones de esta biblioteca". Sin `<stdio.h>`, `printf` no existiría. Sin `<omp.h>`, ninguna función de OpenMP estaría disponible.
+Un `#include` es como decirle al compilador: "necesito usar funciones de esta biblioteca". Como ahora generamos datos (en vez de leerlos de un archivo) y reservamos memoria dinámica, aparecen `<stdlib.h>` (para `malloc`/`rand`) y `<string.h>` (para `memcpy`/`memset`).
 
 ### 4.2 Las constantes (`#define`)
 
 ```c
-#define N_POINTS   150   // cuántas flores tiene el dataset
-#define N_DIMS     4     // cuántas medidas tiene cada flor
-#define K          3     // cuántos clusters queremos
-#define MAX_ITER   100   // máximo de vueltas del algoritmo
-#define THRESHOLD  0.001 // "suficientemente quieto" para parar
-#define LABEL_LEN  64    // tamaño máximo del nombre de especie
+#define N_DIMS    16    // cuántas dimensiones (medidas) tiene cada punto
+#define K         10    // cuántos clusters queremos
+#define MAX_ITER  100   // máximo de vueltas del algoritmo
+#define THRESHOLD 1e-4  // "suficientemente quieto" para parar
 ```
 
-`#define` crea un **sustituto de texto**: antes de compilar, el compilador reemplaza cada `N_POINTS` por `150` en todo el código. No es una variable; es como hacer "buscar y reemplazar" en el código fuente.
+`#define` crea un **sustituto de texto**: antes de compilar, el compilador reemplaza cada `N_DIMS` por `16` en todo el código. No es una variable; es como hacer "buscar y reemplazar" en el código fuente.
 
-¿Por qué usar `#define` en lugar de escribir `150` directamente?
+**Diferencia importante con la versión original (Iris):**
 
-1. **Legibilidad**: `N_POINTS` es más claro que `150`
-2. **Mantenibilidad**: si el dataset cambia a 200 flores, solo cambias una línea
-3. **Evita errores**: si escribes `150` en 20 lugares y luego necesitas cambiarlo, puedes olvidarte de alguno
+Ya **no existe** `N_POINTS`. ¿Por qué? Porque el número de puntos ya no es fijo: el programa prueba varios tamaños (10.000, 100.000, 500.000, 1.000.000) en la misma ejecución. El tamaño actual se pasa como una **variable** `n` a las funciones, no como una constante de compilación.
 
-### 4.3 Los arrays globales
+Subimos `N_DIMS` de 4 a **16** y `K` de 3 a **10**. ¿Por qué? Para que cada distancia sea más costosa de calcular (16 restas y multiplicaciones contra 10 centroides = 160 operaciones por punto), de modo que la fase de asignación domine claramente el tiempo y la paralelización tenga algo sustancial que repartir.
+
+### 4.3 Memoria dinámica: punteros en el heap
+
+En la versión Iris, los datos vivían en arrays globales de tamaño fijo: `double data[150][4]`. Eso funciona para 150 puntos (4.800 bytes), pero **no** para 1.000.000 de puntos en 16 dimensiones:
+
+```
+1.000.000 × 16 × 8 bytes = 128.000.000 bytes ≈ 128 MB
+```
+
+128 MB no caben en la memoria estática ni en la pila (*stack*) — reventarían el programa. La solución es pedir esa memoria en tiempo de ejecución con `malloc`, que la reserva en una zona llamada **heap** (montón), pensada para bloques grandes:
 
 ```c
-double data[N_POINTS][N_DIMS];          // la tabla de datos (150 filas, 4 columnas)
-int    assignments[N_POINTS];           // a qué cluster pertenece cada flor
-double centroids[K][N_DIMS];            // posición actual de los 3 centroides
-double init_centroids[K][N_DIMS];       // copia guardada para repetir el experimento
+double *data        = malloc((size_t)n * N_DIMS * sizeof(double));
+int    *assignments = malloc((size_t)n * sizeof(int));
+double *centroids   = malloc((size_t)K * N_DIMS * sizeof(double));
+double *init_c      = malloc((size_t)K * N_DIMS * sizeof(double));
 ```
 
-**¿Qué es un array 2D?**
+**¿Qué es un puntero?** Una variable que guarda la **dirección de memoria** donde empieza un bloque. `double *data` significa "data apunta al primer `double` de un bloque de doubles".
 
-`data[150][4]` es como una tabla con 150 filas y 4 columnas:
+**¿Qué hace `malloc`?** Reserva un bloque de bytes y devuelve su dirección. `malloc(n * N_DIMS * sizeof(double))` pide espacio para `n × 16` números decimales. `sizeof(double)` es 8 (bytes por double). El `(size_t)` evita que la multiplicación se desborde con números grandes.
 
-```
-data[0][0]=5.1  data[0][1]=3.5  data[0][2]=1.4  data[0][3]=0.2  ← Flor 0
-data[1][0]=4.9  data[1][1]=3.0  data[1][2]=1.4  data[1][3]=0.2  ← Flor 1
-data[2][0]=4.7  data[2][1]=3.2  data[2][2]=1.3  data[2][3]=0.2  ← Flor 2
-...
-```
+**Arreglo "aplanado" (1D que simula 2D):**
 
-Para acceder a la medida `d` de la flor `i`: `data[i][d]`
-
-**¿Por qué variables globales?**
-
-Las variables globales existen mientras el programa corre y son accesibles desde cualquier función. Las variables locales existen solo dentro de su función y desaparecen cuando la función termina.
-
-Usamos globales aquí porque:
-1. Los arrays son grandes (150×4 = 600 doubles = 4800 bytes) — si fueran locales de `main`, habría que pasarlos como parámetros a cada función
-2. OpenMP puede acceder a variables globales desde todos los hilos sin problema
-3. Simplifica el código: no hay que pasar punteros por todas partes
-
-**`double` vs `int`:**
-- `double`: número decimal de doble precisión (64 bits). Ej: 5.1, 3.14159, 0.001
-- `int`: número entero (32 bits). Ej: 0, 1, 2, 150
-
-Usamos `double` para medidas (pueden tener decimales) e `int` para índices y contadores (siempre enteros).
-
-### 4.4 La función `load_iris` — leer el CSV
+Como `data` es un puntero plano, no podemos escribir `data[i][d]`. En su lugar calculamos el índice a mano:
 
 ```c
-int load_iris(const char *filename) {
-    FILE *f = fopen(filename, "r");
-    if (!f) {
-        fprintf(stderr, "Error: no se pudo abrir '%s'\n", filename);
-        exit(1);
-    }
+data[i * N_DIMS + d]   // punto i, dimensión d
 ```
 
-- `FILE *f = fopen(filename, "r")`: abre el archivo en modo lectura. `fopen` retorna un puntero al archivo, o `NULL` si falló.
-- `if (!f)`: si `f` es NULL (el archivo no existe o no se puede abrir), mostramos error y salimos.
-- `fprintf(stderr, ...)`: escribe en la salida de errores (stderr), no en la salida normal (stdout). Esto es buena práctica para mensajes de error.
-- `exit(1)`: termina el programa con código de error 1 (0 = éxito, cualquier otro número = error).
+La fila `i` empieza en la posición `i * 16`, y dentro de ella la columna `d` está en `+ d`. Es exactamente la misma tabla, solo que escrita como una larga tira de números:
 
-```c
-    int n = 0;
-    char label[LABEL_LEN];  // buffer temporal para el nombre de especie
-
-    while (n < N_POINTS &&
-           fscanf(f, "%lf,%lf,%lf,%lf,%63s",
-                  &data[n][0], &data[n][1],
-                  &data[n][2], &data[n][3],
-                  label) == 5) {
-        n++;
-    }
+```
+[ punto0: d0 d1 ... d15 | punto1: d0 d1 ... d15 | punto2: ... ]
+   índices 0..15            índices 16..31
 ```
 
-`fscanf` es como `scanf` pero lee de un archivo en lugar de del teclado.
-
-El formato `"%lf,%lf,%lf,%lf,%63s"` significa:
-- `%lf`: lee un número decimal (`double`) — el `l` es de "long", para `double`
-- `,`: espera una coma literal en el archivo
-- `%63s`: lee una cadena de texto de máximo 63 caracteres (el nombre de la especie)
-
-El `== 5` verifica que se leyeron exactamente **5 campos**. Si el archivo termina o hay una línea mal formada, `fscanf` retorna menos de 5 y el bucle para.
-
-`&data[n][0]` — el `&` significa "dame la **dirección de memoria** de esta variable". `fscanf` necesita saber dónde guardar el número que lee, no el valor actual de la variable.
-
-`label` se usa para leer el nombre de la especie, pero nunca lo usamos después. Solo lo leemos para que `fscanf` avance al siguiente registro.
+**Liberar la memoria:** Todo lo que se pide con `malloc` se debe devolver con `free` cuando ya no se usa, o el programa "gotea" memoria (*memory leak*). Al final de cada tamaño `n`:
 
 ```c
-    fclose(f);
-
-    if (n != N_POINTS) {
-        fprintf(stderr, "Advertencia: se esperaban %d filas, se leyeron %d\n",
-                N_POINTS, n);
-    }
-    return n;
-}
+free(data); free(assignments); free(centroids); free(init_c);
 ```
 
-`fclose(f)`: siempre hay que cerrar los archivos que abrimos. Si no, el sistema operativo puede quedarse con el archivo "bloqueado".
+### 4.4 La función `generate_dataset` — fabricar los puntos
 
-La función retorna `n` (cuántas flores se leyeron) para que `main` pueda verificarlo.
-
-### 4.5 La función `init_centroids_from_data` — elegir centroides iniciales
+En lugar de `load_iris`, ahora **generamos** los datos:
 
 ```c
-void init_centroids_from_data(int seed_indices[K]) {
-    for (int c = 0; c < K; c++) {
+static void generate_dataset(int n, double *data) {
+    srand(42);
+    for (int i = 0; i < n; i++) {
+        int cluster = i % K;
         for (int d = 0; d < N_DIMS; d++) {
-            centroids[c][d]      = data[seed_indices[c]][d];
-            init_centroids[c][d] = data[seed_indices[c]][d];
+            double u1 = (rand() + 1.0) / (RAND_MAX + 1.0);
+            double u2 = (rand() + 1.0) / (RAND_MAX + 1.0);
+            double g  = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+            data[i * N_DIMS + d] = cluster * 10.0 + g;
         }
     }
 }
 ```
 
-Esta función toma un array de índices (`seed_indices = {0, 50, 100}`) y copia las coordenadas de esas flores a los centroides.
+Línea por línea:
 
-El bucle doble:
-- El bucle externo `c` recorre los 3 clusters (c = 0, 1, 2)
-- El bucle interno `d` recorre las 4 dimensiones (d = 0, 1, 2, 3)
+- `srand(42)`: fija la **semilla** del generador aleatorio. Garantiza que cada ejecución produzca los mismos puntos (reproducibilidad).
+- `for (int i = 0; i < n; i++)`: recorre los `n` puntos.
+- `int cluster = i % K;`: el operador `%` es el **residuo**. `i % 10` da 0,1,2,...,9,0,1,2,... Así asignamos cada punto a uno de los K=10 grupos de forma cíclica (puntos balanceados entre clusters).
+- `u1`, `u2`: dos números **uniformes** en el rango (0, 1]. El `+1.0` y `(RAND_MAX+1.0)` evitan obtener exactamente 0 (que rompería el `log`).
+- `g = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2)`: la **transformación de Box-Muller**, que convierte `u1, u2` (uniformes) en `g` (gaussiano con media 0 y desviación 1). `M_PI` es π, definido en `<math.h>`.
+- `data[i*N_DIMS + d] = cluster * 10.0 + g;`: coloca el punto. El centro del grupo es `cluster * 10` (grupo 0 → 0, grupo 1 → 10, ...) y le sumamos el ruido `g`. Resultado: una nube gaussiana alrededor del centro del grupo.
 
-Para c=0, d=0: `centroids[0][0] = data[0][0]` → El centroide 0, dimensión 0 = la flor 0, dimensión 0 = 5.1
+`static` antes de la función significa "esta función solo se usa dentro de este archivo" — buena práctica para funciones auxiliares.
 
-También guarda una copia en `init_centroids`. ¿Por qué? Porque el programa ejecuta K-Means 3 veces (con 1, 2 y 4 hilos) y necesita que todas las ejecuciones partan del **mismo punto inicial** para que la comparación de tiempos sea justa. Si no restauráramos los centroides, la segunda ejecución empezaría con los centroides ya convergidos de la primera, terminaría en 1 iteración y parecería más rápida por razones incorrectas.
+### 4.5 La función `run_kmeans` — el corazón del programa
 
-Usamos índices `{0, 50, 100}` porque coinciden con la primera flor de cada especie, garantizando que los 3 centroides iniciales estén bien separados y el algoritmo converja correctamente.
-
-### 4.6 La función `run_kmeans` — el corazón del programa
-
-Esta es la función más importante. La vamos a analizar en bloques.
+Ahora recibe **parámetros** (en vez de usar globales): el tamaño `n`, el número de hilos y punteros a los arreglos.
 
 **Bloque 1: Preparación**
 
 ```c
-double run_kmeans(int num_threads) {
+static double run_kmeans(int n, int num_threads,
+                         const double *data, int *assignments,
+                         double *centroids, const double *init_c) {
+    // Restaurar centroides iniciales para comparación justa entre runs
+    memcpy(centroids, init_c, (size_t)K * N_DIMS * sizeof(double));
 
-    // Restaurar centroides iniciales para comparación justa
-    for (int c = 0; c < K; c++)
-        for (int d = 0; d < N_DIMS; d++)
-            centroids[c][d] = init_centroids[c][d];
-
-    // Configurar cuántos hilos usará OpenMP
     omp_set_num_threads(num_threads);
-
-    // Iniciar el cronómetro
     double t_start = omp_get_wtime();
 ```
 
-Primero restauramos los centroides (explicado arriba). Luego configuramos los hilos. Luego activamos el cronómetro.
+- `const double *data`: el `const` promete que la función **no modificará** los datos, solo los leerá. Es una garantía de seguridad y documenta la intención.
+- `memcpy(centroids, init_c, ...)`: copia los centroides iniciales de golpe (bloque de bytes). Restauramos el estado inicial para que las corridas con 1, 2 y 4 hilos partan del **mismo punto** y la comparación de tiempos sea justa. Si no lo hiciéramos, la segunda corrida empezaría con centroides ya convergidos y terminaría antes, falseando el speedup.
+- `omp_set_num_threads(num_threads)`: configura cuántos hilos usará la próxima zona paralela.
+- `omp_get_wtime()`: arranca el cronómetro.
 
-**Bloque 2: El bucle principal**
-
-```c
-    for (int iter = 0; iter < MAX_ITER; iter++) {
-```
-
-Este bucle se ejecuta hasta 100 veces. Dentro de él, las dos fases del K-Means.
-
-**Bloque 3: Fase de asignación (paralela)**
+**Bloque 2: Fase de asignación (paralela)**
 
 ```c
         #pragma omp parallel for schedule(static)
-        for (int i = 0; i < N_POINTS; i++) {
-            double min_dist = 1e18;
+        for (int i = 0; i < n; i++) {
+            double min_dist = 1e300;
             int    best     = 0;
-```
-
-`1e18` es la notación científica para 10^18: un número gigantesco. Lo usamos como "infinito" inicial para que cualquier distancia real sea menor.
-
-`min_dist` y `best` son variables **locales al bucle** → son privadas por hilo → no hay race condition.
-
-```c
             for (int c = 0; c < K; c++) {
                 double dist = 0.0;
                 for (int d = 0; d < N_DIMS; d++) {
-                    double diff = data[i][d] - centroids[c][d];
+                    double diff = data[i * N_DIMS + d]
+                                - centroids[c * N_DIMS + d];
                     dist += diff * diff;
                 }
-                if (dist < min_dist) {
-                    min_dist = dist;
-                    best     = c;
-                }
+                if (dist < min_dist) { min_dist = dist; best = c; }
             }
-```
-
-Para cada flor `i`, calculamos la distancia al cuadrado a cada centroide `c`:
-- Bucle externo (c): recorre los 3 centroides
-- Bucle interno (d): suma los cuadrados de diferencias en cada dimensión
-- `diff = data[i][d] - centroids[c][d]`: diferencia en dimensión d
-- `dist += diff * diff`: acumula el cuadrado de la diferencia
-- Al final del bucle c, si `dist` es menor que la mínima encontrada, actualizamos `best`
-
-```c
             assignments[i] = best;
         }
 ```
 
-Guardamos el cluster ganador. `assignments[i]` es escrito solo por el hilo que procesa la iteración `i`. No hay dos hilos escribiendo en el mismo índice. No hay race condition.
+- `#pragma omp parallel for schedule(static)`: reparte el bucle de `n` puntos entre los hilos (ver Parte 3.5).
+- `1e300`: un número gigantesco usado como "infinito" inicial, para que cualquier distancia real sea menor. (Subimos de `1e18` a `1e300` por seguridad; ambos funcionan.)
+- `min_dist` y `best`: locales al bucle → **privadas** por hilo → sin race condition.
+- El doble bucle `c`/`d` calcula la distancia al cuadrado del punto `i` a cada centroide `c`. Fíjate en la aritmética de índices aplanados: `data[i*N_DIMS + d]` y `centroids[c*N_DIMS + d]`.
+- `assignments[i] = best`: cada hilo escribe solo en su propio índice `i` → sin conflicto.
 
-**Bloque 4: Fase de recálculo (serial)**
+**Bloque 3: Fase de recálculo (serial)**
 
 ```c
-        double new_c[K][N_DIMS];
+        double new_c[K * N_DIMS];
         int    counts[K];
+        memset(new_c,  0, sizeof(new_c));
+        memset(counts, 0, sizeof(counts));
 
-        for (int c = 0; c < K; c++) {
-            counts[c] = 0;
-            for (int d = 0; d < N_DIMS; d++)
-                new_c[c][d] = 0.0;
-        }
-```
-
-Inicializamos acumuladores a cero. `new_c[c][d]` va a acumular la suma de la dimensión `d` de todas las flores del cluster `c`. `counts[c]` va a contar cuántas flores hay en el cluster `c`.
-
-```c
-        for (int i = 0; i < N_POINTS; i++) {
+        for (int i = 0; i < n; i++) {
             int c = assignments[i];
             counts[c]++;
             for (int d = 0; d < N_DIMS; d++)
-                new_c[c][d] += data[i][d];
+                new_c[c * N_DIMS + d] += data[i * N_DIMS + d];
         }
 ```
 
-Para cada flor, miramos a qué cluster fue asignada, incrementamos su contador, y sumamos sus coordenadas a los acumuladores del cluster.
+- `new_c[K * N_DIMS]` y `counts[K]`: acumuladores. Como K=10 y N_DIMS=16 son **pequeños y fijos**, sí caben en la pila (no necesitan `malloc`). `new_c` tiene 160 doubles; `counts`, 10 enteros.
+- `memset(..., 0, sizeof(...))`: pone todo el bloque a cero de una sola vez (más limpio que un bucle).
+- El bucle suma las coordenadas de cada punto al acumulador de su cluster y cuenta cuántos puntos tiene cada cluster.
 
 ```c
         double max_shift = 0.0;
         for (int c = 0; c < K; c++) {
             if (counts[c] == 0) continue;
             for (int d = 0; d < N_DIMS; d++) {
-                double new_val = new_c[c][d] / counts[c];
-                double shift   = fabs(new_val - centroids[c][d]);
+                double new_val = new_c[c * N_DIMS + d] / counts[c];
+                double shift   = fabs(new_val - centroids[c * N_DIMS + d]);
                 if (shift > max_shift) max_shift = shift;
-                centroids[c][d] = new_val;
+                centroids[c * N_DIMS + d] = new_val;
             }
         }
 ```
 
-Para cada cluster, calculamos el nuevo centroide dividiendo la suma por el conteo (eso es el promedio). Medimos cuánto se movió cada coordenada del centroide con `fabs()` (valor absoluto). Si el mayor movimiento es `max_shift`, lo comparamos con el umbral.
+Para cada cluster, el nuevo centroide es el **promedio** (suma / conteo). Medimos cuánto se movió cada coordenada con `fabs()` (valor absoluto) y guardamos el mayor desplazamiento en `max_shift`.
 
-`if (counts[c] == 0) continue;`: si un cluster quedó vacío (ninguna flor le fue asignada), saltamos. De lo contrario dividiríamos por cero, lo cual es un error matemático.
+`if (counts[c] == 0) continue;`: si un cluster quedó vacío, saltamos para no dividir por cero.
 
-**Bloque 5: Convergencia y fin**
+**Bloque 4: Convergencia y fin**
 
 ```c
         if (max_shift < THRESHOLD) break;
+    }
 
-    } // fin del bucle K-Means
-
-    double t_end = omp_get_wtime();
-    return t_end - t_start;
+    return omp_get_wtime() - t_start;
 }
 ```
 
-Si ningún centroide se movió más de 0.001, el algoritmo convergió: salimos del bucle anticipadamente con `break`. Si llegamos a 100 iteraciones sin converger, el bucle termina naturalmente.
+Si ningún centroide se movió más de `THRESHOLD` (1e-4), convergimos y salimos con `break`. Finalmente devolvemos el tiempo transcurrido (cronómetro de fin menos cronómetro de inicio).
 
-Finalmente, calculamos el tiempo transcurrido y lo retornamos.
+### 4.6 La función `main` — el director de orquesta
 
-### 4.7 La función `export_results` — guardar para gnuplot
-
-```c
-void export_results(const char *filename) {
-    FILE *f = fopen(filename, "w");  // "w" = escritura (crea o sobreescribe)
-    if (!f) {
-        fprintf(stderr, "Error: no se pudo crear '%s'\n", filename);
-        return;
-    }
-    for (int i = 0; i < N_POINTS; i++) {
-        fprintf(f, "%.2f %.2f %d\n",
-                data[i][2],            // largo_pétalo (columna 2)
-                data[i][3],            // ancho_pétalo (columna 3)
-                assignments[i] + 1);   // cluster 1-indexado
-    }
-    fclose(f);
-}
-```
-
-Escribimos las dimensiones 2 y 3 (largo y ancho del pétalo) porque estas dos características son las que mejor separan visualmente las 3 especies en un gráfico 2D.
-
-`assignments[i] + 1`: los clusters internamente son 0, 1, 2. Le sumamos 1 para que sean 1, 2, 3 en el archivo. Gnuplot usa esta convención en su sintaxis de filtrado.
-
-`%.2f`: formato de punto flotante con 2 decimales. `%d`: entero sin decimales.
-
-El archivo resultante (`resultados.dat`) tiene este aspecto:
-```
-1.40 0.20 1
-1.40 0.20 1
-...
-4.70 1.40 2
-...
-```
-
-### 4.8 La función `export_speedup` — guardar métricas
-
-```c
-void export_speedup(const char *filename,
-                    int threads[], double times[], int n) {
-    FILE *f = fopen(filename, "w");
-    if (!f) { fprintf(stderr, "Error: ...\n"); return; }
-
-    double t1 = times[0];  // tiempo base: el de 1 hilo
-    for (int i = 0; i < n; i++) {
-        double speedup = (times[i] > 0.0) ? (t1 / times[i]) : 1.0;
-        fprintf(f, "%d %.4f\n", threads[i], speedup);
-    }
-    fclose(f);
-}
-```
-
-**Fórmula del speedup:**
-
-```
-Speedup(N hilos) = Tiempo con 1 hilo / Tiempo con N hilos
-```
-
-Si el programa tarda 1 segundo con 1 hilo y 0.5 segundos con 2 hilos, el speedup es 2.0 (el doble de rápido). El speedup ideal con N hilos sería N.
-
-`(times[i] > 0.0) ? (t1 / times[i]) : 1.0`: el operador ternario en C. Significa: "si `times[i]` es mayor que 0, calcula `t1/times[i]`; si no, usa 1.0". Es una protección contra división por cero.
-
-### 4.9 La función `main` — el director de orquesta
+Ahora `main` recorre **varios tamaños** y, para cada uno, prueba **varios números de hilos**.
 
 ```c
 int main(void) {
-
-    // PASO 1: Cargar dataset
-    printf("Cargando iris.csv...\n");
-    int n = load_iris("iris.csv");
-    printf("  %d puntos cargados, %d dimensiones\n\n", n, N_DIMS);
+    int sizes[]   = {10000, 100000, 500000, 1000000};
+    int threads[] = {1, 2, 4};
+    int n_sizes   = 4;
+    int n_threads = 3;
 ```
 
-`main` es la función que ejecuta el sistema operativo cuando corres `./kmeans`. Llama a las demás funciones en el orden correcto.
+`sizes[]` son los tamaños de dataset a probar (el "sweep" o barrido). `threads[]` son las configuraciones de hilos.
 
 ```c
-    // PASO 2: Inicializar centroides
-    int seeds[K] = {0, 50, 100};
-    init_centroids_from_data(seeds);
-```
-
-Elegimos la flor 0 (primera setosa), flor 50 (primera versicolor) y flor 100 (primera virginica) como centroides iniciales.
-
-```c
-    // PASO 3: Ejecutar K-Means con 1, 2 y 4 hilos
-    int    thread_counts[3] = {1, 2, 4};
-    double times[3];
-
-    printf("Ejecutando K-Means (K=%d, max_iter=%d)...\n\n", K, MAX_ITER);
-
-    for (int i = 0; i < 3; i++) {
-        times[i] = run_kmeans(thread_counts[i]);
+    FILE *fout = fopen("resultados/benchmark.dat", "w");
+    if (!fout) {
+        fprintf(stderr, "Error: no se pudo crear resultados/benchmark.dat\n");
+        return 1;
     }
+    fprintf(fout, "# N  hilos  tiempo_s  speedup\n");
 ```
 
-Ejecutamos K-Means 3 veces con diferente número de hilos. Los tiempos se guardan en `times[]`.
+Abrimos el archivo de salida `benchmark.dat` y escribimos una línea de cabecera (la `#` hace que gnuplot la ignore como comentario).
 
 ```c
-    // PASO 4: Mostrar tabla de resultados
-    printf("+---------+-------------+---------+\n");
-    printf("| Hilos   | Tiempo (s)  | Speedup |\n");
-    printf("+---------+-------------+---------+\n");
-    for (int i = 0; i < 3; i++) {
-        double speedup = times[0] / times[i];
-        printf("| %7d | %11.6f | %7.3f |\n",
-               thread_counts[i], times[i], speedup);
+    for (int si = 0; si < n_sizes; si++) {
+        int n = sizes[si];
+        printf("  [generando N=%d puntos...]\n", n);
+
+        double *data        = malloc((size_t)n * N_DIMS * sizeof(double));
+        int    *assignments = malloc((size_t)n * sizeof(int));
+        double *centroids   = malloc((size_t)K * N_DIMS * sizeof(double));
+        double *init_c      = malloc((size_t)K * N_DIMS * sizeof(double));
+
+        if (!data || !assignments || !centroids || !init_c) {
+            fprintf(stderr, "Error: sin memoria suficiente para N=%d\n", n);
+            return 1;
+        }
+```
+
+Para cada tamaño `n`: reservamos memoria (ver 4.3) y verificamos que `malloc` no devolvió `NULL` (señal de que no hubo memoria).
+
+```c
+        generate_dataset(n, data);
+        memcpy(init_c, data, (size_t)K * N_DIMS * sizeof(double));
+```
+
+Generamos los `n` puntos y tomamos los **primeros K puntos** como centroides iniciales (copiándolos a `init_c`). Es una inicialización simple y reproducible: como los puntos se generan en orden de cluster (0,1,2,...), los primeros K caen cada uno en un grupo distinto.
+
+```c
+        double t1 = 0.0;
+        for (int ti = 0; ti < n_threads; ti++) {
+            double t = run_kmeans(n, threads[ti], data, assignments,
+                                  centroids, init_c);
+            if (ti == 0) t1 = t;
+            double speedup = (t > 0.0) ? t1 / t : 1.0;
+
+            printf("%-10d %-8d %-14.6f %-8.3f\n",
+                   n, threads[ti], t, speedup);
+            fprintf(fout, "%d %d %.6f %.4f\n",
+                    n, threads[ti], t, speedup);
+        }
+        printf("\n");
+```
+
+Para este `n`, corremos K-Means con 1, 2 y 4 hilos:
+- `t1` guarda el tiempo con 1 hilo (la referencia para el speedup).
+- `speedup = t1 / t`: cuántas veces más rápido que con 1 hilo.
+- Imprimimos en pantalla **y** escribimos la línea en `benchmark.dat`.
+
+`%-10d` significa entero alineado a la **izquierda** en 10 caracteres (el `-` es la alineación izquierda).
+
+```c
+        free(data);
+        free(assignments);
+        free(centroids);
+        free(init_c);
     }
-    printf("+---------+-------------+---------+\n");
-```
 
-Imprime la tabla de resultados con formato de caja ASCII.
-
-`%7d`: entero alineado a la derecha en un campo de 7 caracteres.  
-`%11.6f`: decimal con 6 cifras después del punto, campo de 11 caracteres.  
-`%7.3f`: decimal con 3 cifras después del punto, campo de 7 caracteres.
-
-```c
-    // PASO 5: Exportar datos para gnuplot
-    export_results("resultados.dat");
-    export_speedup("speedup.dat", thread_counts, times, 3);
-
-    printf("\nEjecutar 'gnuplot graficar.gp' para generar las graficas.\n");
+    fclose(fout);
+    printf("Benchmark exportado a: resultados/benchmark.dat\n");
+    printf("Ejecutar 'gnuplot graficar.gp' para generar las graficas.\n");
     return 0;
 }
 ```
 
-`return 0`: convención en C para indicar que el programa terminó exitosamente. El sistema operativo recibe este valor.
+Liberamos la memoria de este tamaño antes de pasar al siguiente (para no acumular cientos de MB). Al terminar todos los tamaños, cerramos el archivo y avisamos.
+
+`return 0`: convención en C para indicar que el programa terminó exitosamente.
+
+**El formato de `benchmark.dat`** queda así (4 columnas: N, hilos, tiempo, speedup):
+
+```
+# N  hilos  tiempo_s  speedup
+10000 1 0.002402 1.0000
+10000 2 0.001337 1.7960
+10000 4 0.000921 2.6080
+100000 1 0.013071 1.0000
+...
+```
 
 ---
 
@@ -877,21 +836,21 @@ Imprime la tabla de resultados con formato de caja ASCII.
 
 ### 5.1 El análisis de operaciones
 
-Contemos cuántas operaciones hace cada fase en cada iteración del K-Means:
+Contemos cuántas operaciones hace cada fase en cada iteración del K-Means, con nuestros parámetros (K=10, D=16) y el caso grande N=1.000.000:
 
-**Fase de asignación:** Para cada una de las N=150 flores, calculamos la distancia a cada uno de los K=3 centroides, y cada distancia requiere D=4 multiplicaciones y sumas:
-
-```
-Operaciones = N × K × D = 150 × 3 × 4 = 1800 multiplicaciones/sumas
-```
-
-**Fase de recálculo:** Para cada una de las N=150 flores, sumamos sus D=4 coordenadas al acumulador de su cluster:
+**Fase de asignación:** Para cada uno de los N puntos, calculamos la distancia a cada uno de los K=10 centroides, y cada distancia requiere D=16 multiplicaciones y sumas:
 
 ```
-Operaciones = N × D = 150 × 4 = 600 sumas
+Operaciones = N × K × D = 1.000.000 × 10 × 16 = 160.000.000 ops
 ```
 
-La asignación hace 3 veces más trabajo que el recálculo. Paralizar la asignación tiene mayor impacto potencial.
+**Fase de recálculo:** Para cada uno de los N puntos, sumamos sus D=16 coordenadas al acumulador de su cluster:
+
+```
+Operaciones = N × D = 1.000.000 × 16 = 16.000.000 sumas
+```
+
+La asignación hace **10 veces más trabajo** que el recálculo (un factor exacto de K). Es el cuello de botella absoluto: paralelizarla es donde está toda la ganancia. Por eso el enunciado del proyecto pedía específicamente *"optimización de la fase de asignación de centroides"*.
 
 ### 5.2 La condición de independencia
 
@@ -901,8 +860,8 @@ Para paralelizar un bucle con OpenMP sin errores, las iteraciones deben ser **in
 
 ```c
 // Iteración i:
-//   LEE: data[i][...] (solo su propio dato)
-//   LEE: centroids[...][...] (todos leen, nadie escribe)
+//   LEE: data[i*N_DIMS + ...] (solo su propio punto)
+//   LEE: centroids[...] (todos leen, nadie escribe)
 //   ESCRIBE: assignments[i] (su propio índice, nadie más escribe aquí)
 ```
 
@@ -913,11 +872,11 @@ Cada iteración trabaja en un índice diferente de `assignments`. No hay conflic
 ```c
 // Iteración i (sin paralelismo):
 int c = assignments[i];
-counts[c]++;              // ← PROBLEMA
-new_c[c][d] += data[i][d]; // ← PROBLEMA
+counts[c]++;                          // ← PROBLEMA
+new_c[c*N_DIMS + d] += data[i*N_DIMS + d]; // ← PROBLEMA
 ```
 
-Si dos flores i=5 e i=42 pertenecen al mismo cluster c=0, ambas iteraciones intentarían modificar `counts[0]` y `new_c[0][d]` al mismo tiempo. Race condition garantizada.
+Si dos puntos i=5 e i=42 pertenecen al mismo cluster c=0, ambas iteraciones intentarían modificar `counts[0]` y `new_c[0*N_DIMS + d]` al mismo tiempo. Race condition garantizada.
 
 **¿Se podría paralizar con `reduction`?**
 
@@ -925,42 +884,46 @@ Sí, OpenMP tiene la directiva `reduction` para sumar acumuladores de forma segu
 ```c
 // Esta versión sería correcta pero más compleja:
 #pragma omp parallel for reduction(+:counts) schedule(static)
-for (int i = 0; i < N_POINTS; i++) { ... }
+for (int i = 0; i < n; i++) { ... }
 ```
 
-Sin embargo, el recálculo hace 600 operaciones vs 1800 de la asignación. Añadir complejidad (y overhead) para paralizar el 25% del trabajo cuando el 75% ya está paralelizado no vale la pena. La solución simple (serial) es la correcta aquí.
+Sin embargo, el recálculo hace ~16M operaciones vs ~160M de la asignación (con N=1M): es solo el **~9%** del trabajo, mientras el **~91%** ya está paralelizado. Añadir complejidad (y overhead) para paralizar esa pequeña fracción no vale la pena. La solución simple (serial) es la correcta aquí.
 
 ---
 
-## Parte 6 — ¿Por qué el speedup es menor a 1?
+## Parte 6 — El speedup: por qué ahora sí funciona
 
 ### 6.1 Los resultados reales
 
-Nuestras mediciones (guardadas en `speedup.dat`):
+Nuestras mediciones (guardadas en `benchmark.dat`, en una máquina de 16 cores) muestran **speedup mayor a 1** para todos los tamaños — la paralelización funciona:
 
 ```
-1 hilo  → speedup = 1.000  (referencia)
-2 hilos → speedup = 0.210  (5 veces MÁS LENTO que 1 hilo)
-4 hilos → speedup = 0.150  (6.7 veces MÁS LENTO que 1 hilo)
+                 2 hilos    4 hilos
+N = 10.000    →   1.80x  →   2.61x
+N = 100.000   →   1.91x  →   2.76x
+N = 500.000   →   1.31x  →   2.89x
+N = 1.000.000 →   1.74x  →   2.85x
 ```
 
-Esto parece un fallo, pero es correcto. ¿Por qué?
+Con 4 hilos el programa corre consistentemente **~2.6 a 2.9 veces más rápido**. Compáralo con el desastre del dataset Iris original (Parte 0.5), donde 4 hilos daba speedup 0.15 (¡6.7x más lento!). La diferencia es **el tamaño del problema**.
 
-### 6.2 Anatomía del tiempo de ejecución
+(Los valores exactos varían según la máquina, su número de cores, su carga y la velocidad de la CPU. Lo importante es la tendencia: speedup > 1, creciente con los hilos.)
 
-Cuando el programa corre con 4 hilos, el tiempo total se divide así:
+### 6.2 Anatomía del tiempo de ejecución (N grande)
+
+Cuando el programa corre con 4 hilos sobre N=1.000.000, el reparto del tiempo es muy distinto al de Iris:
 
 | Componente | Tiempo aproximado |
 |------------|-----------------|
 | Crear 4 hilos | ~20-40 μs |
-| Distribuir trabajo (150 flores) | ~1-5 μs |
-| Calcular distancias de 150 flores | ~0.5-2 μs |
+| Distribuir trabajo (1M puntos) | ~1-5 μs |
+| **Calcular distancias de 1M puntos** | **~130.000 μs (130 ms)** |
 | Esperar que todos terminen (barrera) | ~5-10 μs |
 | Destruir hilos | ~10-20 μs |
 | **Total overhead** | ~36-77 μs |
-| **Trabajo real** | ~0.5-2 μs |
+| **Trabajo real** | ~130.000 μs |
 
-El overhead de gestión de hilos es **10-100 veces mayor** que el trabajo que hacemos. Es como contratar 4 albañiles para poner un solo ladrillo: el tiempo de llamarlos, explicarles la tarea y despedirlos supera el tiempo de poner el ladrillo.
+Ahora el **trabajo real es ~2000 veces mayor que el overhead**. El trámite de los hilos (que con Iris arruinaba todo) se vuelve insignificante. Es como contratar 4 albañiles para construir una casa entera: el rato que tardan en organizarse no importa frente a las semanas de trabajo.
 
 ### 6.3 La Ley de Amdahl — desde cero
 
@@ -979,31 +942,34 @@ Donde:
   N    = número de hilos
 ```
 
-**Con nuestros datos:**
+**Con nuestros datos (N grande):**
 
-El trabajo paralelo (asignación) dura ~1800 ops. El trabajo serial (resto) incluye recálculo (~600 ops) + overhead de OpenMP. Con N=150 y overhead dominante, la fracción paralela efectiva es muy pequeña.
-
-Si la fracción paralela es P=0.01 (muy pequeña por el overhead):
+La fase paralela (asignación) hace ~160M ops; la serial (recálculo + overhead) hace ~16M ops + un overhead despreciable. La fracción paralela es aproximadamente:
 
 ```
-S(2) = 1 / ( (1-0.01) + 0.01/2 ) = 1 / (0.99 + 0.005) = 1 / 0.995 ≈ 1.005
-S(4) = 1 / ( (1-0.01) + 0.01/4 ) = 1 / (0.99 + 0.0025) ≈ 1.007
+P ≈ 160 / (160 + 16) ≈ 0.91
 ```
 
-Con fracción paralela tan pequeña, agregar más hilos prácticamente no ayuda. De hecho, si el overhead aumenta con N hilos, puede ir hacia atrás.
-
-### 6.4 ¿Cuándo sí valdría la pena?
-
-Con N=1,000,000 de flores, el cálculo de distancias dominaría completamente:
-- Cálculo de distancias: ~12,000,000 operaciones (~12 ms)
-- Overhead de hilos: ~0.05 ms
+Aplicando Amdahl:
 
 ```
-Fracción paralela: P ≈ 12 / 12.05 ≈ 0.996
-S(4) = 1 / (0.004 + 0.996/4) ≈ 3.7  → ¡Casi 4x más rápido!
+S(2) = 1 / ( (1-0.91) + 0.91/2 ) = 1 / (0.09 + 0.455) = 1 / 0.545 ≈ 1.83
+S(4) = 1 / ( (1-0.91) + 0.91/4 ) = 1 / (0.09 + 0.2275) = 1 / 0.3175 ≈ 3.15
 ```
 
-**Conclusión:** OpenMP es poderoso, pero solo cuando el trabajo supera al overhead. Para N=150, el dataset es demasiado pequeño. Para N>100,000, el speedup se acerca al número de hilos.
+¡Estos valores teóricos (1.83 y 3.15) coinciden muy bien con los medidos (~1.8 y ~2.8)! La pequeña diferencia con 4 hilos (3.15 teórico vs ~2.8 real) se debe a factores no contemplados por Amdahl: contención de memoria (varios cores compitiendo por el bus de RAM), efectos de caché y el overhead que sí crece un poco con más hilos.
+
+### 6.4 El umbral de paralelización, cuantificado
+
+Amdahl explica el **umbral** de la Parte 0.5. La fracción paralela efectiva `P` depende del tamaño del problema:
+
+| Dataset | Trabajo cómputo | Overhead relativo | P efectiva | Speedup 4 hilos |
+|---------|----------------|-------------------|-----------|-----------------|
+| Iris (N=150) | ~μs | domina | ≈ 0.01 | ≈ 0.15 (¡peor!) |
+| N = 10.000 | ~ms | pequeño | ≈ 0.85 | ≈ 2.6 |
+| N = 1.000.000 | ~130 ms | despreciable | ≈ 0.91 | ≈ 2.85 |
+
+**Conclusión:** OpenMP es poderoso, pero solo cuando el trabajo supera al overhead. Con N=150 (Iris) el dataset es demasiado pequeño y paralelizar empeora. A partir de decenas de miles de puntos, el speedup se hace claramente positivo y se acerca (sin llegar) al número de hilos. Esa es exactamente la lección que el proyecto buscaba demostrar con "conjuntos de datos masivos".
 
 ---
 
@@ -1051,7 +1017,7 @@ make
 
 Internamente ejecuta:
 ```bash
-gcc -O2 -fopenmp -o kmeans kmeans.c -lm
+gcc -O2 -fopenmp -o kmeans src/kmeans.c -lm
 ```
 
 **¿Qué significa cada parte?**
@@ -1073,7 +1039,7 @@ GCC resuelve las bibliotecas de izquierda a derecha. Si escribieras `-lm kmeans.
 
 Si no tienes `make`:
 ```bash
-gcc -O2 -fopenmp -o kmeans kmeans.c -lm
+gcc -O2 -fopenmp -o kmeans src/kmeans.c -lm
 ```
 
 ### 7.4 Ejecutar el programa
@@ -1090,33 +1056,40 @@ make run
 ### 7.5 Interpretar la salida
 
 ```
-Cargando iris.csv...
-  150 puntos cargados, 4 dimensiones
+K-Means Paralelo con OpenMP
+Dataset sintetico gaussiano: D=16 dimensiones, K=10 clusters
 
-Ejecutando K-Means (K=3, max_iter=100)...
+N          Hilos    Tiempo (s)     Speedup 
+---------- -------- -------------- --------
+  [generando N=10000 puntos...]
+10000      1        0.002402       1.000   
+10000      2        0.001337       1.796   
+10000      4        0.000921       2.608   
 
-+---------+-------------+---------+
-| Hilos   | Tiempo (s)  | Speedup |
-+---------+-------------+---------+
-|       1 |    0.000124 |   1.000 |
-|       2 |    0.000592 |   0.210 |
-|       4 |    0.000827 |   0.150 |
-+---------+-------------+---------+
+  [generando N=100000 puntos...]
+100000     1        0.013071       1.000   
+100000     2        0.006859       1.906   
+100000     4        0.004736       2.760   
 
-Nota: con N=150 el overhead de hilos puede superar la ganancia.
-Para N > 100000 el speedup se acerca al numero de hilos.
+  [generando N=500000 puntos...]
+500000     1        0.066961       1.000   
+500000     2        0.051024       1.312   
+500000     4        0.023205       2.886   
 
-Resultados exportados a: resultados.dat
-Speedup exportado a:     speedup.dat
+  [generando N=1000000 puntos...]
+1000000    1        0.133134       1.000   
+1000000    2        0.076526       1.740   
+1000000    4        0.046690       2.851   
 
+Benchmark exportado a: resultados/benchmark.dat
 Ejecutar 'gnuplot graficar.gp' para generar las graficas.
 ```
 
-- **Tiempo con 1 hilo:** ~0.000124 segundos = ~0.124 milisegundos = ~124 microsegundos
-- **Tiempo con 2 hilos:** más lento (overhead de crear y sincronizar 2 hilos)
-- **Speedup = 0.210:** con 2 hilos el programa es 0.21x la velocidad de 1 hilo, o sea, ~5x más lento
+- **Tiempo con 1 hilo (N=1M):** ~0.133 segundos = 133 milisegundos
+- **Tiempo con 4 hilos (N=1M):** ~0.047 segundos → mucho más rápido
+- **Speedup = 2.851:** con 4 hilos el programa es ~2.85x la velocidad de 1 hilo
 
-Los valores exactos varían según la máquina, carga del sistema y velocidad de la CPU.
+Fíjate cómo el speedup con 4 hilos crece y se mantiene en ~2.6-2.9x para todos los tamaños grandes. Los valores exactos varían según la máquina, su número de cores, carga del sistema y velocidad de la CPU.
 
 ---
 
@@ -1162,34 +1135,38 @@ make all-plots
 
 ### 8.4 Las dos gráficas generadas
 
-**`clusters.png` — Scatter plot de flores por cluster**
+Ambas se construyen a partir de `resultados/benchmark.dat` (4 columnas: N, hilos, tiempo, speedup).
 
-Muestra las 150 flores como puntos en un gráfico 2D donde:
-- Eje X = largo del pétalo (cm)
-- Eje Y = ancho del pétalo (cm)
-- Color rojo = Cluster 1 (Iris-setosa: pétalos pequeños, abajo-izquierda)
-- Color azul = Cluster 2 (Iris-versicolor: pétalos medianos)
-- Color verde = Cluster 3 (Iris-virginica: pétalos grandes, arriba-derecha)
+**`speedup.png` — Speedup vs número de hilos (una curva por N)**
 
-Los 3 grupos deben verse claramente separados. Esto demuestra que K-Means encontró los grupos naturales correctamente sin conocer las etiquetas.
+Muestra cómo escala el speedup según el tamaño del dataset:
+- Eje X = número de hilos (1, 2, 4)
+- Eje Y = speedup (T₁ / Tₙ)
+- Línea gris punteada = speedup **ideal** (lineal: 2 hilos = 2x, 4 hilos = 4x)
+- Una línea de color por cada N (10k, 100k, 500k, 1M)
 
-**`speedup.png` — Curva de speedup**
+Todas las curvas reales deben estar **por encima de 1** y subir con los hilos, acercándose (sin tocar) la línea ideal. Esto demuestra que con datos masivos la paralelización **sí acelera** — lo opuesto al caso Iris.
 
-Muestra dos líneas:
-- Línea gris punteada: speedup **ideal** (lineal: 2 hilos = 2x, 4 hilos = 4x)
-- Línea roja: speedup **real** medido
+**`scaling.png` — Tiempo de ejecución vs tamaño N (escala log-log)**
 
-La línea real debería estar muy por debajo de la ideal, demostrando el efecto del overhead de OpenMP con N=150.
+Muestra cómo crece el tiempo al aumentar N y cuánto ayuda cada número de hilos:
+- Eje X = N (escala logarítmica: 10⁴, 10⁵, 10⁶)
+- Eje Y = tiempo en segundos (escala logarítmica)
+- Una línea por número de hilos (1, 2, 4)
+
+La línea de 4 hilos (verde) está siempre **por debajo** de la de 1 hilo (roja): tarda menos para el mismo N. Las tres líneas son aproximadamente rectas y paralelas, lo que en escala log-log confirma el crecimiento **lineal** O(N) del algoritmo.
+
+> Nota: el filtrado por número de hilos en `scaling.png` se hace con `awk` vía pipe (`"< awk '$2==1' ..."`), porque las filas de un mismo hilo no son contiguas en el archivo y el truco habitual de gnuplot (`$2==1 ? $1 : 1/0`) rompería las líneas.
 
 ### 8.5 Ver las imágenes
 
 ```bash
 # Linux con entorno gráfico:
-eog clusters.png         # Eye of GNOME
-xdg-open clusters.png    # abre con el visor predeterminado
+eog resultados/speedup.png         # Eye of GNOME
+xdg-open resultados/scaling.png    # abre con el visor predeterminado
 
 # macOS:
-open clusters.png
+open resultados/speedup.png
 
 # En el terminal sin interfaz gráfica, copia el archivo a tu máquina local
 ```
@@ -1209,8 +1186,12 @@ open clusters.png
 | **Convergencia** | Cuando el algoritmo "se estabiliza": los centroides dejan de moverse más allá de un umbral pequeño. |
 | **Aprendizaje no supervisado** | Aprender patrones en datos sin usar etiquetas ni respuestas correctas. K-Means es un ejemplo. |
 | **Iteración** | Una vuelta completa del bucle K-Means: asignar todos los puntos + recalcular todos los centroides. |
-| **THRESHOLD** | El umbral de convergencia (0.001 en nuestro código). Si ningún centroide se mueve más de este valor, paramos. |
-| **K** | El número de clusters que queremos encontrar. En K-Means hay que especificarlo de antemano. |
+| **THRESHOLD** | El umbral de convergencia (1e-4 en nuestro código). Si ningún centroide se mueve más de este valor, paramos. |
+| **K** | El número de clusters que queremos encontrar. En K-Means hay que especificarlo de antemano. (En este proyecto K=10.) |
+| **Datos sintéticos** | Puntos generados artificialmente por el programa (no leídos de un archivo real), lo que permite elegir el tamaño N libremente. |
+| **Distribución gaussiana** | La "campana de Gauss": ruido aleatorio donde los valores cercanos a la media son los más probables. |
+| **Box-Muller** | Fórmula que convierte dos números aleatorios uniformes en uno gaussiano. La usamos para fabricar las nubes de puntos. |
+| **Umbral de paralelización** | Tamaño mínimo de problema a partir del cual paralelizar acelera (speedup > 1). Por debajo, el overhead domina y empeora. |
 
 ### Conceptos de sistemas y paralelismo
 
@@ -1250,18 +1231,20 @@ open clusters.png
 | **`#define`** | Define una constante simbólica. El compilador reemplaza el nombre por el valor antes de compilar. |
 | **`double`** | Tipo de dato: número decimal de 64 bits (alta precisión). Ejemplos: 5.1, 3.14159. |
 | **`int`** | Tipo de dato: número entero de 32 bits. Ejemplos: 0, 1, 150, -5. |
-| **Array 2D** | Tabla de datos accesible con dos índices: `data[fila][columna]`. |
+| **Heap (montón)** | Zona de memoria para bloques grandes pedidos en tiempo de ejecución. Aquí viven nuestros datos de hasta 128 MB. |
+| **`malloc` / `free`** | Reservar y liberar memoria en el heap. Todo lo que se pide con `malloc` se debe devolver con `free`. |
+| **Arreglo aplanado** | Un puntero 1D que simula una tabla 2D: el elemento `[fila][col]` se accede como `arr[fila*ANCHO + col]`. |
+| **`memcpy` / `memset`** | Copiar un bloque de bytes / poner un bloque de bytes a un valor (típicamente 0). Más rápido que un bucle. |
+| **`rand` / `srand`** | Generador de números pseudoaleatorios y su semilla. `srand(42)` fija la semilla para reproducibilidad. |
 | **`fopen` / `fclose`** | Abrir y cerrar archivos. Siempre hay que cerrar lo que se abre. |
-| **`fscanf`** | Leer datos formateados de un archivo (análogo a `scanf` pero de archivo). |
 | **`fprintf`** | Escribir datos formateados en un archivo (análogo a `printf` pero a archivo). |
 | **`fabs(x)`** | Valor absoluto de x en punto flotante. Requiere `#include <math.h>`. |
 | **`exit(1)`** | Termina el programa inmediatamente con código de error. |
-| **Variable global** | Declarada fuera de toda función. Existe durante toda la ejecución del programa. |
 | **Variable local** | Declarada dentro de una función. Existe solo mientras esa función ejecuta. |
-| **Puntero (`*`)** | Variable que guarda la dirección de memoria de otra variable, no el valor directamente. |
-| **`&variable`** | Operador de dirección: "dame la dirección de memoria de esta variable". |
+| **Puntero (`*`)** | Variable que guarda la dirección de memoria de otra variable (o el inicio de un bloque), no el valor directamente. |
+| **`const`** | Promesa de que una función no modificará el dato apuntado (solo lo lee). Documenta la intención y previene errores. |
 
 ---
 
-*Proyecto K-Means con OpenMP — Dataset Iris*  
+*Proyecto K-Means con OpenMP — Dataset sintético masivo*  
 *Guía de estudio para principiantes*

@@ -69,12 +69,15 @@ En este trabajo se presenta la implementación paralela de la Criba de
 Eratóstenes utilizando el estándar \textit{Message Passing Interface} (MPI).
 El algoritmo divide el rango de búsqueda $[2, N]$ en segmentos equitativos
 distribuidos entre los procesos disponibles; los primos base hasta
-$\sqrt{N}$ se difunden mediante \texttt{MPI\_Bcast} y cada proceso tamiza
+$\sqrt{N}$ se envían a cada proceso mediante comunicación punto a punto
+(\texttt{MPI\_Send} / \texttt{MPI\_Recv}) y cada proceso tamiza
 su segmento de forma independiente. Se evalúa el rendimiento con $N =
 10{,}000{,}000$ para 1, 2 y 4 procesos, midiendo el tiempo de ejecución con
-\texttt{MPI\_Wtime}. Los resultados muestran un speedup cercano al lineal
-para configuraciones de pocos procesos, lo que valida la eficacia de la
-estrategia de distribución adoptada.
+\texttt{MPI\_Wtime}. Los resultados muestran un speedup cercano al ideal con
+2 procesos (1.997) que se vuelve sublineal con 4 (2.474), comportamiento
+esperable dado el reducido tamaño del problema, donde la fracción secuencial y
+el costo de comunicación punto a punto pesan más a medida que crece el número
+de procesos.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -161,32 +164,42 @@ Tabla~\ref{tab:mpi_ops}.
 \caption{Operaciones MPI utilizadas}
 \label{tab:mpi_ops}
 \centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
 \begin{tabular}{@{}lll@{}}
 \toprule
 \textbf{Operación} & \textbf{Dirección} & \textbf{Propósito} \\
 \midrule
 \texttt{MPI\_Init} & local & Arrancar el entorno MPI \\
-\texttt{MPI\_Comm\_rank} & local & Obtener identificador del proceso \\
-\texttt{MPI\_Comm\_size} & local & Obtener total de procesos \\
-\texttt{MPI\_Bcast} & rank 0 $\to$ todos & Difundir primos base \\
-\texttt{MPI\_Gather} & todos $\to$ rank 0 & Recolectar conteos locales \\
+\texttt{MPI\_Comm\_rank} & local & Identificador del proceso \\
+\texttt{MPI\_Comm\_size} & local & Total de procesos \\
+\texttt{MPI\_Send} & $0 \to$ resto & Enviar primos base \\
+\texttt{MPI\_Recv} & resto $\to 0$ & Recibir primos / conteos \\
 \texttt{MPI\_Wtime} & local & Medir tiempo de ejecución \\
 \texttt{MPI\_Finalize} & local & Cerrar el entorno MPI \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-La operación clave es \texttt{MPI\_Bcast}: rank 0 calcula los primos hasta
-$\sqrt{N}$ (en nuestro caso, 446 primos para $N = 10{,}000{,}000$) y los
-distribuye a todos. Sin estos primos base, ningún proceso podría saber qué
-múltiplos marcar en su segmento~\cite{gropp1999,quinn2003}.
+A diferencia de las operaciones colectivas, en este trabajo toda la
+comunicación se realiza \emph{punto a punto}. La operación clave es el reparto
+de los primos base: rank 0 calcula los primos hasta $\sqrt{N}$ (en nuestro
+caso, 446 primos para $N = 10{,}000{,}000$) y los envía a cada proceso con un
+bucle de llamadas \texttt{MPI\_Send}; cada proceso receptor los obtiene con
+\texttt{MPI\_Recv}. Sin estos primos base, ningún proceso podría saber qué
+múltiplos marcar en su segmento~\cite{gropp1999,quinn2003}. De forma simétrica,
+al final cada proceso envía su conteo local con \texttt{MPI\_Send} y rank 0 los
+recibe uno a uno con \texttt{MPI\_Recv}. Se optó por comunicación punto a punto
+en lugar de las primitivas colectivas \texttt{MPI\_Bcast} y \texttt{MPI\_Gather}
+para mostrar explícitamente el patrón emisor--receptor que subyace a toda la
+comunicación en MPI.
 
 \subsection{Pseudocódigo}
 
 El Algoritmo~\ref{alg:criba} describe la estructura del programa en
 pseudocódigo, independiente de cualquier lenguaje de implementación. Las
-operaciones colectivas de MPI aparecen como pasos descriptivos; su semántica
-se detalla en la Sección~\ref{sec:funciones_mpi}.
+operaciones de comunicación punto a punto de MPI aparecen como pasos
+descriptivos; su semántica se detalla en la Sección~\ref{sec:funciones_mpi}.
 
 \begin{algorithm}[h]
 \caption{Criba de Eratóstenes distribuida con MPI}
@@ -201,9 +214,12 @@ se detalla en la Sección~\ref{sec:funciones_mpi}.
 \STATE
 \IF{$rank = 0$}
   \STATE $primos\_base \gets$ criba secuencial sobre $[2, \sqrt{N}]$
+  \FOR{$dest = 1$ \textbf{hasta} $size-1$}
+    \STATE enviar $base\_count$ y $primos\_base$ a $dest$ \COMMENT{MPI\_Send}
+  \ENDFOR
+\ELSE
+  \STATE recibir $base\_count$ y $primos\_base$ de $rank\,0$ \COMMENT{MPI\_Recv}
 \ENDIF
-\STATE Difundir $base\_count$ desde $rank\,0$ a todos \COMMENT{MPI\_Bcast}
-\STATE Difundir $primos\_base$ desde $rank\,0$ a todos \COMMENT{MPI\_Bcast}
 \STATE
 \STATE $low \gets 2 + rank \cdot (N-1) / size$
 \STATE $high \gets$ fin del segmento de este proceso
@@ -212,7 +228,11 @@ se detalla en la Sección~\ref{sec:funciones_mpi}.
 \ENDFOR
 \STATE $conteo \gets$ número de no marcados en el segmento
 \STATE
-\STATE Recolectar todos los $conteo$ en $rank\,0$ \COMMENT{MPI\_Gather}
+\IF{$rank = 0$}
+  \STATE recibir cada $conteo$ de los procesos $1\dots size-1$ \COMMENT{MPI\_Recv}
+\ELSE
+  \STATE enviar $conteo$ local a $rank\,0$ \COMMENT{MPI\_Send}
+\ENDIF
 \STATE $t_{\text{fin}} \gets$ tiempo actual \COMMENT{MPI\_Wtime}
 \IF{$rank = 0$}
   \STATE imprimir resultados y escribir \texttt{resultados.dat}
@@ -239,15 +259,23 @@ A continuación se describe el propósito de cada una:
         que permite que un mismo binario se comporte distinto en cada proceso.
   \item \texttt{MPI\_Comm\_size}: devuelve \textit{size}, la cantidad total de
         procesos. Con él cada proceso calcula el tamaño de su segmento.
-  \item \texttt{MPI\_Bcast}: comunicación colectiva \textit{uno-a-todos}. El
-        proceso raíz ($rank\,0$) difunde un dato y todos los demás reciben una
-        copia idéntica. Aquí transmite los primos base; sin ellos, los procesos
-        $1,2,\dots$ no sabrían qué múltiplos marcar. Todos los procesos deben
-        invocarla con los mismos argumentos, o el programa se bloquea.
-  \item \texttt{MPI\_Gather}: comunicación colectiva \textit{todos-a-uno}, la
-        operación inversa de \texttt{MPI\_Bcast}. Cada proceso envía su conteo
-        local y el raíz los recibe ordenados por \textit{rank} en un arreglo,
-        donde luego los suma para obtener el total.
+  \item \texttt{MPI\_Send}: envío \textit{bloqueante punto a punto}. Transmite un
+        mensaje desde el proceso que la invoca hacia un único destino,
+        identificado por su \textit{rank}. Sus argumentos son el buffer de datos,
+        la cantidad de elementos, el tipo, el rank destino, un \textit{tag}
+        (etiqueta entera que distingue mensajes) y el comunicador. Aquí rank 0 la
+        usa dentro de un bucle para enviar los primos base a cada proceso; sin
+        ellos, los procesos $1,2,\dots$ no sabrían qué múltiplos marcar. Recorrer
+        los destinos con \texttt{MPI\_Send} \emph{emula} la difusión que haría una
+        primitiva colectiva, pero deja explícito cada par emisor--receptor.
+  \item \texttt{MPI\_Recv}: recepción \textit{bloqueante punto a punto}, la
+        contraparte de \texttt{MPI\_Send}. Espera un mensaje de un origen y
+        \textit{tag} dados y lo deposita en un buffer; el proceso queda detenido
+        hasta que el mensaje llega. Cada par \texttt{Send}/\texttt{Recv} debe
+        coincidir en tipo, tamaño, \textit{tag} y comunicador. Los procesos la
+        usan para recibir los primos base de rank 0; y al final, rank 0 la invoca
+        en un bucle para recolectar el conteo local de cada proceso, ordenándolos
+        por \textit{rank} para luego sumarlos y obtener el total.
   \item \texttt{MPI\_Wtime}: devuelve un instante de tiempo de alta resolución
         en segundos; la diferencia entre dos llamadas mide el tiempo de
         ejecución empleado para calcular el \textit{speedup}.
@@ -281,9 +309,6 @@ valida la correctitud de la distribución y del algoritmo de marcado.
 La Tabla~\ref{tab:speedup} muestra los tiempos de ejecución y el speedup
 obtenidos al ejecutar el programa con 1, 2 y 4 procesos MPI.
 
-\textit{Nota: los valores de la tabla son de referencia. Reemplácelos con
-los resultados reales de \texttt{make benchmark} en su sistema.}
-
 \begin{table}[h]
 \caption{Tiempos de ejecución y speedup para $N = 10{,}000{,}000$}
 \label{tab:speedup}
@@ -292,9 +317,9 @@ los resultados reales de \texttt{make benchmark} en su sistema.}
 \toprule
 \textbf{Procesos} & \textbf{Tiempo (s)} & \textbf{Speedup} \\
 \midrule
-1 & 0.4521 & 1.000 \\
-2 & 0.2387 & 1.894 \\
-4 & 0.1312 & 3.446 \\
+1 & 0.0234 & 1.000 \\
+2 & 0.0117 & 1.997 \\
+4 & 0.0094 & 2.474 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -323,8 +348,10 @@ ideal $S(p) = p$. El speedup real es sublineal debido a:
 \begin{itemize}
   \item La fracción secuencial del programa (cálculo de primos base en
         rank 0 y escritura de archivo), regida por la ley de Amdahl.
-  \item La latencia de \texttt{MPI\_Bcast} y \texttt{MPI\_Gather}, que
-        crece con el número de procesos.
+  \item La latencia de las llamadas punto a punto \texttt{MPI\_Send} y
+        \texttt{MPI\_Recv}: rank 0 emite y recibe $O(p)$ mensajes de forma
+        secuencial, por lo que el costo de comunicación crece linealmente con
+        el número de procesos $p$.
   \item El overhead del sistema operativo al lanzar procesos MPI en una
         sola máquina compartiendo memoria física.
 \end{itemize}
@@ -421,15 +448,19 @@ Se implementó exitosamente la Criba de Eratóstenes distribuida utilizando
 MPI, obteniendo el resultado correcto de $\pi(10^7) = 664{,}579$ primos en
 todos los experimentos.
 
-El speedup alcanzado es cercano al lineal para 2 y 4 procesos, lo que
-indica que la fracción paralelizable del algoritmo es dominante. Las
-principales limitaciones provienen de la porción secuencial (criba base) y
-del overhead de comunicación, ambas moduladas por la ley de Amdahl.
+El speedup alcanzado es cercano al ideal con 2 procesos (1.997) y se vuelve
+sublineal con 4 (2.474). Esto indica que, para $N = 10^7$, la fracción
+paralelizable es dominante pero no abrumadora: las principales limitaciones
+provienen de la porción secuencial (criba base) y del overhead de comunicación
+punto a punto, que crece con el número de procesos, ambas moduladas por la ley
+de Amdahl.
 
 La implementación en un único archivo \texttt{.c} con comentarios extensos
-demuestra que los patrones fundamentales de MPI —inicialización, difusión
-colectiva y recolección— pueden expresarse de forma clara y legible sin
-sacrificar correctitud.
+demuestra que los patrones fundamentales de MPI —inicialización, envío y
+recepción punto a punto (\texttt{MPI\_Send} / \texttt{MPI\_Recv})— pueden
+expresarse de forma clara y legible sin sacrificar correctitud, y que el reparto
+y la recolección de datos pueden construirse con primitivas punto a punto sin
+recurrir a operaciones colectivas.
 
 Como trabajo futuro se podría explorar:
 \begin{itemize}

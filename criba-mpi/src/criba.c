@@ -6,9 +6,10 @@
  *
  * Cada proceso trabaja sobre un segmento del rango [2, N].
  * Los primos base (hasta sqrt(N)) se calculan en rank 0 y se
- * distribuyen a todos via MPI_Bcast. Luego cada proceso tamiza
- * su segmento de forma independiente. Al final rank 0 recolecta
- * los conteos y escribe resultados.dat.
+ * envian a cada proceso con MPI_Send/MPI_Recv (comunicacion punto
+ * a punto). Luego cada proceso tamiza su segmento de forma
+ * independiente. Al final rank 0 recolecta los conteos, tambien
+ * con MPI_Send/MPI_Recv, y escribe resultados.dat.
  */
 
 #include <mpi.h>
@@ -43,8 +44,9 @@ int main(int argc, char *argv[])
      * dentro de nuestro segmento.
      *
      * Todos los procesos podrían calcularlo solos (son solo ~446
-     * primos para N=10M), pero usamos MPI_Bcast intencionalmente
-     * para demostrar el patrón de comunicación colectiva.
+     * primos para N=10M), pero lo calcula solo rank 0 y luego lo
+     * reparte con MPI_Send/MPI_Recv para demostrar el patrón de
+     * comunicación punto a punto.
      */
     int raiz_n = (int)sqrt((double)N);
     int base_count = 0;
@@ -78,23 +80,40 @@ int main(int argc, char *argv[])
         free(marcado);
     }
 
-    /* === PASO 3: Difundir los primos base a todos los procesos ===
-     * MPI_Bcast envía un mensaje desde rank 0 a TODOS los demás.
-     * Primero enviamos cuántos primos hay (base_count) para que
-     * los otros procesos sepan cuánta memoria reservar.
-     * Luego enviamos el arreglo completo.
+    /* === PASO 3: Enviar los primos base a todos los procesos ===
+     * En lugar de una difusión colectiva (MPI_Bcast), rank 0 ENVÍA
+     * explícitamente el arreglo a cada proceso con MPI_Send dentro
+     * de un bucle, y cada proceso lo RECIBE con MPI_Recv. Esto es
+     * comunicación PUNTO A PUNTO: un emisor y un receptor por mensaje.
+     *
+     * Por cada destino mandamos dos mensajes:
+     *   tag 0 -> base_count (cuántos primos hay), para que el receptor
+     *            sepa cuánta memoria reservar.
+     *   tag 1 -> el arreglo base_primes completo.
+     * El 'tag' es una etiqueta que distingue un mensaje de otro entre
+     * el mismo par de procesos.
+     *
+     * rank 0 ya tiene base_primes del PASO 2, así que no se envía a
+     * sí mismo: el bucle arranca en dest = 1.
      *
      * Sin esto, los procesos 1, 2, ... no sabrían qué números usar
      * para tamizan su segmento.
      */
-    MPI_Bcast(&base_count, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if (rank == 0) {
+        for (int dest = 1; dest < size; dest++) {
+            MPI_Send(&base_count, 1, MPI_INT, dest, 0, MPI_COMM_WORLD);
+            MPI_Send(base_primes, base_count, MPI_INT, dest, 1, MPI_COMM_WORLD);
+        }
+    } else {
+        MPI_Recv(&base_count, 1, MPI_INT, 0, 0,
+                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-    if (rank != 0) {
         base_primes = malloc(base_count * sizeof(int));
         if (!base_primes) { MPI_Abort(MPI_COMM_WORLD, 1); }
-    }
 
-    MPI_Bcast(base_primes, base_count, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Recv(base_primes, base_count, MPI_INT, 0, 1,
+                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    }
 
     /* === PASO 4: Determinar el segmento de este proceso ===
      * Dividimos el rango [2, N] en 'size' partes iguales.
@@ -145,18 +164,26 @@ int main(int argc, char *argv[])
     for (long long i = 0; i < seg_size; i++)
         if (!segmento[i]) conteo_local++;
 
-    /* === PASO 7: Recolectar conteos en rank 0 ===
-     * MPI_Gather envía el valor de cada proceso hacia rank 0,
-     * quien los recibe en el arreglo 'conteos[]'.
+    /* === PASO 7: Recolectar conteos en rank 0 (punto a punto) ===
+     * En lugar de MPI_Gather, cada proceso (≠0) ENVÍA su conteo local
+     * con MPI_Send, y rank 0 los RECIBE uno por uno con MPI_Recv,
+     * guardándolos en conteos[src] según el rank emisor. Usamos el
+     * tag 2 para estos mensajes.
+     *
+     * rank 0 ya tiene su propio conteo, así que lo copia directamente
+     * en conteos[0] y solo recibe de los procesos 1..size-1.
      * Con esto rank 0 sabe cuántos primos encontró cada proceso.
      */
     long long *conteos = NULL;
-    if (rank == 0)
+    if (rank == 0) {
         conteos = malloc(size * sizeof(long long));
-
-    MPI_Gather(&conteo_local, 1, MPI_LONG_LONG,
-               conteos, 1, MPI_LONG_LONG,
-               0, MPI_COMM_WORLD);
+        conteos[0] = conteo_local;          /* rank 0 ya tiene el suyo */
+        for (int src = 1; src < size; src++)
+            MPI_Recv(&conteos[src], 1, MPI_LONG_LONG, src, 2,
+                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    } else {
+        MPI_Send(&conteo_local, 1, MPI_LONG_LONG, 0, 2, MPI_COMM_WORLD);
+    }
 
     /* Detenemos el cronómetro */
     double t_fin  = MPI_Wtime();

@@ -339,69 +339,113 @@ MPI_Finalize();                              // Apaga MPI. Va al final siempre.
 Regla importante: si un proceso llama `MPI_Init`, **debe** llamar `MPI_Finalize` antes
 de terminar. Si no, el programa puede colgarse o dar errores raros.
 
-### 3.4 MPI_Bcast — "el jefe transmite algo y todos escuchan"
+### 3.4 MPI_Send y MPI_Recv — "mandar y recibir una carta certificada"
 
-`Bcast` = Broadcast = "emitir a todos".
+Estas son las dos funciones de comunicación **punto a punto** de MPI: un proceso
+**envía** (`MPI_Send`) un mensaje a OTRO proceso específico, y ese otro lo
+**recibe** (`MPI_Recv`). Siempre van en pareja: por cada `Send` debe haber un
+`Recv` que lo espere.
 
-Como una estación de radio: el locutor (Proceso 0) habla una sola vez y todos los
-radios sintonizados (Procesos 1, 2, 3) reciben exactamente la misma señal.
+Piensa en **cartas certificadas**: el Proceso 0 escribe una carta y la manda a un
+destinatario concreto (Proceso 1, luego Proceso 2, luego Proceso 3). Cada
+destinatario tiene que estar esperando para recibir SU carta.
+
+**Los argumentos:**
+
+```c
+MPI_Send(datos, count, tipo, dest,   tag, comm);
+//       ↑qué    ↑cuántos ↑tipo ↑a quién ↑etiqueta ↑comunicador
+
+MPI_Recv(datos, count, tipo, source, tag, comm, status);
+//       ↑dónde guardo   ↑tipo ↑de quién ↑etiqueta      ↑info del mensaje
+```
+
+- **dest / source**: el *rank* del proceso con quien me comunico.
+- **tag**: una etiqueta numérica para distinguir un mensaje de otro entre el mismo
+  par de procesos (p.ej. tag 0 = "el conteo", tag 1 = "el arreglo"). El `Recv`
+  debe pedir el MISMO tag que usó el `Send`.
+- **status**: información extra del mensaje recibido. Si no la necesitas, pasas
+  `MPI_STATUS_IGNORE`.
 
 **Situación:** el Proceso 0 calculó los primos base. Los demás los necesitan pero
-no los tienen.
+no los tienen. Como no hay una función "emitir a todos", rank 0 le manda una copia
+a cada proceso **uno por uno**, dentro de un bucle:
+
+```c
+if (rank == 0) {
+    for (int dest = 1; dest < size; dest++) {       // a cada compañero...
+        MPI_Send(&base_count, 1, MPI_INT, dest, 0, MPI_COMM_WORLD);   // tag 0
+        MPI_Send(base_primes, base_count, MPI_INT, dest, 1, MPI_COMM_WORLD); // tag 1
+    }
+} else {
+    MPI_Recv(&base_count, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    base_primes = malloc(base_count * sizeof(int));   // ahora sé cuánto reservar
+    MPI_Recv(base_primes, base_count, MPI_INT, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+}
+```
 
 ```
-ANTES del MPI_Bcast:
+ANTES de los Send/Recv:
   Proceso 0: base_primes = [2, 3, 5, 7, 11, 13, ...]   ← tiene los datos
   Proceso 1: base_primes = ??? (memoria sin inicializar)  ← no sabe nada
   Proceso 2: base_primes = ???
   Proceso 3: base_primes = ???
 
-         ↓ MPI_Bcast(base_primes, base_count, MPI_INT, 0, MPI_COMM_WORLD)
-                     ↑qué envío    ↑cuántos   ↑tipo   ↑quién envía (rank 0)
+         ↓ rank 0 hace MPI_Send a 1, luego a 2, luego a 3
+         ↓ cada uno hace MPI_Recv y reserva memoria
 
-DESPUÉS del MPI_Bcast:
+DESPUÉS de los Send/Recv:
   Proceso 0: base_primes = [2, 3, 5, 7, 11, 13, ...]   ← igual que antes
   Proceso 1: base_primes = [2, 3, 5, 7, 11, 13, ...]   ← recibió copia exacta!
   Proceso 2: base_primes = [2, 3, 5, 7, 11, 13, ...]   ← recibió copia exacta!
   Proceso 3: base_primes = [2, 3, 5, 7, 11, 13, ...]   ← recibió copia exacta!
 ```
 
-**Regla clave:** **todos** los procesos deben llamar `MPI_Bcast`. El Proceso 0
-"envía" y los demás "reciben", pero todos llaman la misma función con los mismos
-argumentos. Si algún proceso no la llama, el programa se cuelga esperando para
-siempre — como si el empleado no estuviera sentado para recibir la carta.
+**El resultado final es el mismo que daría un "broadcast"**: todos terminan con la
+misma copia. La diferencia es que aquí lo construimos nosotros con un bucle de
+envíos punto a punto, viendo explícitamente cada par emisor→receptor.
 
-**¿Por qué hacemos dos Bcast seguidos en el código?**
+**Regla clave:** cada `MPI_Send` necesita un `MPI_Recv` que lo espere (mismo
+`source`, `tag` y `comm`). Si un proceso hace `Recv` y nadie le manda nada, se
+queda colgado esperando para siempre — como un empleado sentado esperando una
+carta que nunca llega. Por eso rank 0 NO se manda a sí mismo: ya tiene los datos,
+y el bucle arranca en `dest = 1`.
 
-```c
-MPI_Bcast(&base_count, 1, MPI_INT, 0, MPI_COMM_WORLD);   // primero: cuántos hay
-// ... los procesos 1, 2, 3 reservan memoria aquí (malloc) ...
-MPI_Bcast(base_primes, base_count, MPI_INT, 0, MPI_COMM_WORLD);  // luego: el arreglo
-```
+**¿Por qué dos mensajes seguidos (conteo y luego arreglo)?**
 
 Los Procesos 1, 2, 3 necesitan reservar memoria para recibir los primos. Para saber
 cuánta memoria reservar, primero necesitan saber cuántos primos hay (`base_count`).
-Por eso enviamos el conteo primero, reservamos memoria, y luego enviamos el arreglo.
+Por eso mandamos el conteo primero (tag 0), reservamos memoria con `malloc`, y luego
+mandamos el arreglo (tag 1).
 
-### 3.5 MPI_Gather — "todos reportan su resultado al jefe"
+### 3.5 Recolectar conteos con Send/Recv — "cada quien reporta al jefe"
 
-`Gather` = "recolectar". Es el opuesto de Bcast: cada proceso envía un dato, y
-rank 0 los recibe todos juntos en un arreglo.
+Es la operación inversa al reparto: ahora cada proceso le **envía** su resultado a
+rank 0, y rank 0 lo **recibe** de todos, uno por uno, guardándolos en un arreglo.
 
 **Situación:** cada proceso terminó de contar cuántos primos hay en su segmento.
 Rank 0 necesita sumarlos todos para dar el total.
 
+```c
+if (rank == 0) {
+    conteos[0] = conteo_local;                  // rank 0 ya tiene el suyo
+    for (int src = 1; src < size; src++)        // recibe del 1, del 2, del 3...
+        MPI_Recv(&conteos[src], 1, MPI_LONG_LONG, src, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+} else {
+    MPI_Send(&conteo_local, 1, MPI_LONG_LONG, 0, 2, MPI_COMM_WORLD);  // tag 2
+}
 ```
-ANTES del MPI_Gather:
+
+```
+ANTES de recolectar:
   Proceso 0: conteo_local = 183,072   (primos del 2 al 2,500,000)
   Proceso 1: conteo_local = 165,441   (primos del 2,500,001 al 5,000,000)
   Proceso 2: conteo_local = 159,748   (primos del 5,000,001 al 7,500,000)
   Proceso 3: conteo_local = 156,318   (primos del 7,500,001 al 10,000,000)
 
-         ↓ MPI_Gather(&conteo_local, 1, MPI_LONG_LONG,
-                       conteos, 1, MPI_LONG_LONG, 0, MPI_COMM_WORLD)
+         ↓ procesos 1,2,3 hacen MPI_Send; rank 0 hace MPI_Recv en bucle
 
-DESPUÉS del MPI_Gather (solo el Proceso 0 tiene esto):
+DESPUÉS de recolectar (solo el Proceso 0 tiene esto):
   Proceso 0: conteos[0] = 183,072
              conteos[1] = 165,441
              conteos[2] = 159,748
@@ -585,7 +629,7 @@ por qué existe, y qué significan las líneas más crípticas.
 ### Los `#include` y el `#define`
 
 ```c
-#include <mpi.h>      // Agrega las definiciones de MPI_Init, MPI_Bcast, etc.
+#include <mpi.h>      // Agrega las definiciones de MPI_Init, MPI_Send, etc.
 #include <stdio.h>    // Agrega printf, fprintf, fopen, fclose
 #include <stdlib.h>   // Agrega malloc, calloc, free
 #include <math.h>     // Agrega sqrt()
@@ -671,9 +715,9 @@ los números del 2 al 3162. El resultado es el arreglo `base_primes` con los 446
 primos menores o iguales a 3162.
 
 **¿Por qué solo rank 0?** Porque alguien tiene que hacerlo una vez. Rank 0 lo hace
-y luego lo comparte con todos vía `MPI_Bcast`. Todos los procesos podrían calcularlo
-independientemente (son pocos números), pero usamos Bcast para demostrar el patrón
-de comunicación colectiva MPI.
+y luego lo reparte a todos enviándolo con `MPI_Send`. Todos los procesos podrían
+calcularlo independientemente (son pocos números), pero lo hace solo rank 0 y lo
+reparte con Send/Recv para demostrar el patrón de comunicación punto a punto de MPI.
 
 **Desglose línea a línea:**
 
@@ -704,31 +748,44 @@ de comunicación colectiva MPI.
 - `free(marcado)` — devuelve la memoria del arreglo `marcado` al sistema operativo.
   Ya no la necesitamos; los primos están en `base_primes`.
 
-### PASO 3: Difundir los primos base a todos
+### PASO 3: Enviar los primos base a todos (Send/Recv)
 
 ```c
-MPI_Bcast(&base_count, 1, MPI_INT, 0, MPI_COMM_WORLD);
-
-if (rank != 0)
+if (rank == 0) {
+    for (int dest = 1; dest < size; dest++) {
+        MPI_Send(&base_count, 1, MPI_INT, dest, 0, MPI_COMM_WORLD);
+        MPI_Send(base_primes, base_count, MPI_INT, dest, 1, MPI_COMM_WORLD);
+    }
+} else {
+    MPI_Recv(&base_count, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     base_primes = malloc(base_count * sizeof(int));
-
-MPI_Bcast(base_primes, base_count, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Recv(base_primes, base_count, MPI_INT, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+}
 ```
 
-**¿Qué hace?** Rank 0 envía los primos base a todos los procesos.
+**¿Qué hace?** Rank 0 envía los primos base a cada proceso, uno por uno, con
+comunicación punto a punto (sin usar un broadcast colectivo).
 
 **Desglose:**
 
-1. **Primer Bcast** — envía `base_count` (un solo entero) desde rank 0 a todos.
-   Después de esta línea, todos los procesos saben cuántos primos base hay.
+1. **`if (rank == 0)`** — solo rank 0 entra al bucle de envíos. Recorre los
+   destinos `dest = 1, 2, 3` y a cada uno le manda DOS mensajes:
+   - `MPI_Send(&base_count, ..., dest, 0, ...)` (tag 0): cuántos primos hay.
+   - `MPI_Send(base_primes, ..., dest, 1, ...)` (tag 1): el arreglo completo.
 
-2. **`if (rank != 0) malloc(...)`** — los Procesos 1, 2, 3 reservan memoria para
-   recibir los primos. El Proceso 0 ya tiene `base_primes` del paso anterior.
+   Rank 0 NO se manda a sí mismo: ya tiene `base_primes` del paso anterior, por
+   eso el bucle arranca en `dest = 1`.
 
-3. **Segundo Bcast** — envía el arreglo completo `base_primes` de una vez.
+2. **`else` (procesos 1, 2, 3)** — cada uno recibe en el mismo orden:
+   - `MPI_Recv(&base_count, ..., 0, 0, ...)` recibe el conteo (tag 0).
+   - `malloc(...)` reserva memoria ahora que ya sabe cuántos primos hay.
+   - `MPI_Recv(base_primes, ..., 0, 1, ...)` recibe el arreglo (tag 1).
 
-Después de estas 3 líneas, **todos los procesos** tienen exactamente el mismo
-arreglo `base_primes` con los 446 primos hasta 3162.
+   `MPI_STATUS_IGNORE` indica que no nos interesa la info extra del mensaje.
+
+Después de este bloque, **todos los procesos** tienen exactamente el mismo
+arreglo `base_primes` con los 446 primos hasta 3162 — el mismo resultado que
+daría un broadcast, pero construido con envíos punto a punto.
 
 ### PASO 4: Determinar el segmento de este proceso
 
@@ -840,36 +897,38 @@ que caben en un `int` de 32 bits.
 
 ```c
 long long *conteos = NULL;
-if (rank == 0)
+if (rank == 0) {
     conteos = malloc(size * sizeof(long long));
-
-MPI_Gather(&conteo_local, 1, MPI_LONG_LONG,
-           conteos,       1, MPI_LONG_LONG,
-           0, MPI_COMM_WORLD);
+    conteos[0] = conteo_local;          // rank 0 ya tiene el suyo
+    for (int src = 1; src < size; src++)
+        MPI_Recv(&conteos[src], 1, MPI_LONG_LONG, src, 2,
+                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+} else {
+    MPI_Send(&conteo_local, 1, MPI_LONG_LONG, 0, 2, MPI_COMM_WORLD);
+}
 
 double t_fin  = MPI_Wtime();
 double tiempo = t_fin - t_inicio;
 ```
 
 **¿Qué hace?** Rank 0 recibe el conteo de primos de cada proceso y los guarda
-en el arreglo `conteos`. También se detiene el cronómetro.
+en el arreglo `conteos`, usando comunicación punto a punto. También se detiene
+el cronómetro.
 
-**Desglose de MPI_Gather:**
+**Desglose:**
 ```
-Parámetros: MPI_Gather(send_buf, send_count, send_type,
-                       recv_buf, recv_count, recv_type,
-                       root, communicator)
+Procesos 1, 2, 3:  MPI_Send(&conteo_local, 1, MPI_LONG_LONG, 0, 2, comm)
+                   → cada uno manda su conteo a rank 0 (tag 2).
 
-send_buf    = &conteo_local → cada proceso envía su conteo local
-send_count  = 1             → envía exactamente 1 elemento
-send_type   = MPI_LONG_LONG → el tipo de dato es long long
-recv_buf    = conteos       → rank 0 recibe en este arreglo
-recv_count  = 1             → recibe 1 elemento por proceso
-recv_type   = MPI_LONG_LONG → tipo del receptor
-root        = 0             → quien recibe todo (rank 0)
+Rank 0:  conteos[0] = conteo_local      → su propio conteo, sin enviarlo
+         for src = 1..size-1:
+             MPI_Recv(&conteos[src], 1, MPI_LONG_LONG, src, 2, comm, IGNORE)
+         → recibe uno por uno y los guarda en conteos[src] según el emisor.
 ```
 
 Resultado: `conteos[0]` tiene el conteo del Proceso 0, `conteos[1]` del Proceso 1, etc.
+Es la operación inversa al PASO 3: allí rank 0 enviaba a todos; aquí todos le envían
+a rank 0.
 
 **`MPI_LONG_LONG`** — constante MPI que indica "el dato es de tipo long long de C".
 MPI necesita saber el tipo para saber cuántos bytes enviar.
@@ -1009,9 +1068,9 @@ Corre el programa con 1, 2 y 4 procesos, mide los tiempos e imprime:
 +----------+-------------+---------+
 | Procesos |    Tiempo   | Speedup |
 +----------+-------------+---------+
-|        1 |    0.0264 s |   1.000 |
-|        2 |    0.0128 s |   2.060 |
-|        4 |    0.0096 s |   2.753 |
+|        1 |    0.0234 s |   1.000 |
+|        2 |    0.0117 s |   1.997 |
+|        4 |    0.0094 s |   2.474 |
 +----------+-------------+---------+
 ```
 
@@ -1023,21 +1082,21 @@ También genera el archivo `speedup.dat` para Gnuplot.
 Speedup = Tiempo con 1 proceso / Tiempo con N procesos
 ```
 
-- **Speedup = 2.06** con 2 procesos significa: el programa es 2.06 veces más rápido
-  que la versión de 1 proceso.
+- **Speedup = 1.997** con 2 procesos significa: el programa es casi 2 veces más rápido
+  que la versión de 1 proceso (muy cerca del ideal).
 
 - **Speedup ideal** con N procesos = N (si 2 procesos hacen exactamente la mitad
   del trabajo cada uno, el tiempo se divide exactamente a la mitad).
 
 - **Speedup real** siempre es menor que el ideal porque hay **overhead de comunicación**:
-  el tiempo que tarda `MPI_Bcast` y `MPI_Gather`, más el overhead de lanzar procesos,
+  el tiempo que tardan los `MPI_Send` y `MPI_Recv`, más el overhead de lanzar procesos,
   sincronización, etc.
 
 ```
 Eficiencia = (Speedup real / Procesos) × 100%
 
-Con 2 procesos: (2.06 / 2) × 100% = 103% ← ligeramente sobre-lineal (variación de medición)
-Con 4 procesos: (2.75 / 4) × 100% = 69%  ← buena eficiencia para este problema
+Con 2 procesos: (1.997 / 2) × 100% = 100% ← casi perfecto
+Con 4 procesos: (2.474 / 4) × 100% = 62%  ← cae al subir procesos (más comunicación)
 ```
 
 ---
@@ -1181,9 +1240,9 @@ Lo más valioso que aprendiste **no es la criba en sí**, sino el **patrón** de
 trabajo en paralelo. Lo hiciste en 3 movimientos:
 
 ```
-1. REPARTIR  → cada proceso recibió un pedazo del rango [2, N]   (scatter)
-2. CALCULAR  → cada uno tamizó su pedazo solo, sin molestar a nadie  (compute)
-3. JUNTAR    → rank 0 recolectó los conteos con MPI_Gather        (gather)
+1. REPARTIR  → rank 0 envió los primos base con MPI_Send a cada proceso  (send)
+2. CALCULAR  → cada uno tamizó su pedazo solo, sin molestar a nadie      (compute)
+3. JUNTAR    → rank 0 recibió los conteos con MPI_Recv de cada proceso   (recv)
 ```
 
 Pues bien: existen proyectos **reales** de investigación matemática que hacen
@@ -1272,8 +1331,8 @@ Las dos caras de la misma moneda, ambas con cribas y paralelismo.
 ---
 
 **La gran conclusión:** programaste una criba de primos hasta 10 millones, pero
-en realidad aprendiste el **mismo patrón** (`Bcast` para repartir + cálculo local
-+ `Gather` para juntar) que usan los proyectos que cazan los primos más grandes
+en realidad aprendiste el **mismo patrón** (`MPI_Send` para repartir + cálculo
+local + `MPI_Recv` para juntar) que usan los proyectos que cazan los primos más grandes
 del mundo, verifican conjeturas centenarias y ponen a prueba la criptografía. Lo
 tuyo es la versión de bolsillo —pequeña y verificable ($\pi(10^7)=664{,}579$)— de
 algo que se ejecuta a escala planetaria.
@@ -1288,8 +1347,10 @@ algo que se ejecuta a escala planetaria.
 | **rank** | El número de identidad de un proceso (0, 1, 2, ...). El proceso rank 0 es el "jefe" por convención. |
 | **size** | La cantidad total de procesos lanzados. Con `mpirun -np 4`, size=4. |
 | **MPI_COMM_WORLD** | El "comunicador" que incluye a absolutamente todos los procesos del programa. |
-| **broadcast** | Enviar el mismo dato desde un proceso hacia todos los demás. `MPI_Bcast` = "emitir a todos". |
-| **gather** | Recolectar un dato de cada proceso hacia el proceso raíz (rank 0). El opuesto del broadcast. |
+| **punto a punto** | Comunicación entre DOS procesos concretos: uno envía (`MPI_Send`) y otro recibe (`MPI_Recv`). Es la base de toda la comunicación en MPI. |
+| **MPI_Send** | Envía un mensaje a UN proceso destino. Argumentos: datos, count, tipo, dest, tag, comunicador. Bloquea hasta poder enviar. |
+| **MPI_Recv** | Recibe un mensaje de UN proceso origen. Debe coincidir con su `Send` en tipo, tag y comunicador. Bloquea hasta que el mensaje llega. |
+| **tag** | Etiqueta numérica que distingue mensajes entre el mismo par de procesos. El `Recv` debe pedir el mismo tag que usó el `Send`. |
 | **segmento** | La porción del rango [2, N] que le toca procesar a un proceso. Cada uno trabaja en su propio segmento. |
 | **primo** | Número entero > 1 que solo se divide exactamente entre 1 y sí mismo: 2, 3, 5, 7, 11, 13, ... |
 | **compuesto** | Número que tiene divisores además de 1 y sí mismo: 4=2×2, 6=2×3, 9=3×3, 10=2×5, ... |
@@ -1303,9 +1364,9 @@ algo que se ejecuta a escala planetaria.
 | **long long** | Tipo de dato de C que ocupa 8 bytes. Puede guardar números hasta ~9,200,000,000,000,000,000. |
 | **ceil** | Función matemática "techo": redondea hacia arriba. ceil(3.2)=4, ceil(3.0)=3, ceil(-2.7)=-2. |
 | **overflow** | Desbordamiento: cuando un número es demasiado grande para el tipo de dato que lo guarda. Ej: un int no puede guardar 3,000,000,000. |
-| **speedup** | Cuánto más rápido es el programa paralelo vs el secuencial. Speedup=2.75 = es 2.75 veces más rápido. |
+| **speedup** | Cuánto más rápido es el programa paralelo vs el secuencial. Speedup=2.47 = es 2.47 veces más rápido. |
 | **eficiencia** | Speedup dividido entre el número de procesos × 100%. Mide qué tan bien se aprovechan los procesos. |
-| **overhead de comunicación** | El tiempo "extra" que consumen los mensajes MPI (Bcast, Gather). Hace que el speedup real sea menor que el ideal. |
+| **overhead de comunicación** | El tiempo "extra" que consumen los mensajes MPI (los `Send`/`Recv`). Hace que el speedup real sea menor que el ideal. |
 | **speedup ideal** | El speedup máximo teórico: con N procesos, el ideal es N (trabajo perfectamente dividido, sin overhead). |
 | **MPI_Wtime** | Función que devuelve el tiempo actual en segundos con alta precisión. Se usa como cronómetro. |
 | **MPI_LONG_LONG** | Constante MPI que representa el tipo `long long` de C. Los mensajes MPI necesitan saber el tipo del dato. |

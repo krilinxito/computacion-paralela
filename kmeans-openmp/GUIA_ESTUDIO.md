@@ -18,7 +18,8 @@
 - [Parte 6 — El speedup: por qué ahora sí funciona](#parte-6--el-speedup-por-qué-ahora-sí-funciona)
 - [Parte 7 — Compilar y ejecutar](#parte-7--compilar-y-ejecutar)
 - [Parte 8 — Gráficas con Gnuplot](#parte-8--gráficas-con-gnuplot)
-- [Parte 9 — Glosario completo](#parte-9--glosario-completo)
+- [Parte 9 — K-Means en el mundo real: las bibliotecas (como scikit-learn)](#parte-9--k-means-en-el-mundo-real-las-bibliotecas-como-scikit-learn)
+- [Parte 10 — Glosario completo](#parte-10--glosario-completo)
 
 ---
 
@@ -1173,7 +1174,81 @@ open resultados/speedup.png
 
 ---
 
-## Parte 9 — Glosario completo
+## Parte 9 — K-Means en el mundo real: las bibliotecas (como scikit-learn)
+
+Hasta aquí escribimos K-Means **a mano** en C, línea por línea, para entender qué pasa por dentro. Pero en el mundo real casi nadie programa K-Means desde cero: usan **bibliotecas** ya hechas. La buena noticia es que esas bibliotecas hacen **exactamente lo mismo que nosotros** — solo que más pulido. Todo lo que aprendiste en esta guía es lo que ocurre dentro de ellas.
+
+### 9.1 ¿Qué es una biblioteca?
+
+Una **biblioteca** (o "librería", del inglés *library*) es una colección de código ya escrito y probado por otras personas, que tú puedes usar sin reinventarlo. Es como comprar un pastel en lugar de hornearlo: alguien ya resolvió la receta, tú solo lo usas.
+
+En vez de escribir 200 líneas de C, alguien que use una biblioteca escribe **3 líneas** y obtiene el mismo resultado (¡y a veces más rápido!). La biblioteca de K-Means más famosa del mundo se llama **scikit-learn**, y es de Python.
+
+### 9.2 scikit-learn: K-Means en 4 líneas
+
+**scikit-learn** (se pronuncia "sai-kit-lern") es la caja de herramientas de aprendizaje automático más usada en Python. Hacer con ella lo que nosotros hicimos en todo `kmeans.c` se ve así:
+
+```python
+from sklearn.cluster import KMeans
+
+modelo = KMeans(n_clusters=10)   # queremos K=10 grupos
+modelo.fit(data)                 # ¡encuentra los clusters!
+print(modelo.labels_)            # a qué cluster fue cada punto
+print(modelo.cluster_centers_)   # los 10 centroides finales
+```
+
+Eso es todo. `n_clusters=10` es nuestro `K=10`. `fit(data)` hace el bucle completo de asignación + recálculo + convergencia que programamos a mano. `labels_` es nuestro arreglo `assignments`, y `cluster_centers_` son nuestros `centroids`. **Mismo algoritmo, misma idea — solo que ya empaquetado.**
+
+### 9.3 Lo que scikit-learn hace MEJOR que nuestra versión
+
+Nuestra versión es didáctica; scikit-learn es de producción. Las diferencias son de "acabado", no de fondo:
+
+- **Elige mejor los centroides de arranque (k-means++).** Nosotros tomamos los primeros K puntos como centroides iniciales. scikit-learn usa un truco llamado **k-means++**: escoge puntos de partida que estén bien separados entre sí. Es como repartir a los 10 "líderes de grupo" por toda la sala en lugar de juntarlos en una esquina — el algoritmo converge más rápido y a una solución mejor.
+- **Lo intenta varias veces y se queda con la mejor.** K-Means puede caer en una "mala" solución según dónde arranque. scikit-learn lo corre varias veces (parámetro `n_init`) con distintos arranques y conserva el mejor resultado. Nosotros corremos una sola vez.
+- **Tiene un atajo para no calcular distancias de más (algoritmo de Elkan).** Nosotros, para cada punto, calculamos su distancia a **los 10** centroides siempre (fuerza bruta). scikit-learn puede usar el **algoritmo de Elkan**, que con una regla geométrica (la desigualdad triangular) descarta centroides que "seguro no son el más cercano" sin calcular la distancia. Menos cuentas, mismo resultado.
+- **Usa matemáticas vectorizadas (BLAS).** Por debajo se apoya en bibliotecas de álgebra ultra-optimizadas (OpenBLAS, Intel MKL) que calculan muchas distancias de golpe aprovechando instrucciones especiales del procesador.
+
+### 9.4 ¿Y la paralelización? ¡También usa hilos, igual que nosotros!
+
+Aquí viene lo importante para este proyecto: **scikit-learn paraleliza K-Means, y en el fondo lo hace con OpenMP — la misma herramienta que usamos en C.**
+
+Aunque scikit-learn se usa desde Python, su parte pesada **no está escrita en Python**. Está escrita en **Cython** (un lenguaje parecido a Python que se traduce a C) precisamente para poder usar OpenMP. Es decir: cuando llamas a `fit()`, por debajo se ejecuta código C con `#pragma omp` repartiendo los puntos entre los hilos, **exactamente el mecanismo de la Parte 3 de esta guía**.
+
+scikit-learn paraleliza en dos niveles:
+
+1. **Reparte los puntos entre hilos** (memoria compartida, con OpenMP) — igual que nuestra fase de asignación. Puedes controlar cuántos hilos con la misma variable de entorno que vimos: `OMP_NUM_THREADS=4`.
+2. **Reparte los reintentos** (`n_init`) entre varios procesos con una herramienta llamada **joblib** (parámetro `n_jobs`), para correr varias "partidas" de K-Means a la vez.
+
+> **¿Por qué Python necesita ese truco?** Python "puro" tiene un candado interno (el famoso *GIL*) que le impide usar varios hilos de cómputo a la vez. Por eso las bibliotecas serias bajan a C/Cython para el trabajo pesado: ahí el GIL se libera y OpenMP puede repartir el trabajo entre cores de verdad. Lo que tú hiciste directamente en C, scikit-learn lo hace "por dentro".
+
+### 9.5 Tabla: lo que hicimos nosotros vs. scikit-learn
+
+| Aspecto | Nuestra versión en C | scikit-learn |
+|---------|---------------------|--------------|
+| Algoritmo base | K-Means (Lloyd) | K-Means (Lloyd o Elkan) |
+| Centroides iniciales | Primeros K puntos | k-means++ (mejor) |
+| Reintentos | 1 | varios (`n_init`), guarda el mejor |
+| Lenguaje del núcleo | C | Cython (≈ C por debajo) |
+| Paralelización de la asignación | OpenMP (`#pragma omp`) | **OpenMP también** |
+| Control de hilos | `omp_set_num_threads` / `OMP_NUM_THREADS` | `OMP_NUM_THREADS` y `n_jobs` |
+| Modelo de memoria | Compartida | Compartida |
+| Líneas de código que escribes | ~200 | ~4 |
+
+**La conclusión bonita:** lo que programaste a mano en este proyecto **es la maquinaria que vive dentro de scikit-learn**. Entender nuestra versión te permite entender por qué `KMeans()` de scikit-learn es rápido, qué significan sus parámetros y cuándo conviene subir el número de hilos.
+
+### 9.6 Otras bibliotecas y otras formas de paralelizar
+
+K-Means aparece en muchas herramientas, y cada una elige un "modelo de paralelismo" según el tamaño del problema:
+
+- **NumPy / SciPy (Python).** No traen un K-Means listo, pero son la base sobre la que se construye scikit-learn. Sus operaciones con matrices usan BLAS multihilo (MKL/OpenBLAS): otra forma de paralelismo de **memoria compartida**, parecida a la nuestra.
+- **cuML (RAPIDS).** Es K-Means en **GPU** (la tarjeta gráfica). En lugar de 4 u 8 hilos de la CPU, una GPU tiene **miles** de hilos diminutos que procesan miles de puntos a la vez. Misma idea de "repartir puntos", pero a una escala enorme. Ideal para datasets gigantescos.
+- **Spark MLlib.** Cuando los datos son tan grandes que **no caben en una sola computadora**, Spark reparte el trabajo entre **muchas máquinas** conectadas en red. Esto ya no es memoria compartida (los hilos de OpenMP), sino **memoria distribuida**: cada máquina procesa su pedazo y luego comparten resultados por la red. Es el mismo paradigma de **MPI** (el otro proyecto de esta materia, la Criba de Eratóstenes con MPI). 
+
+En una frase: **OpenMP reparte trabajo entre los cores de UNA computadora; MPI/Spark lo reparten entre VARIAS computadoras; la GPU lo reparte entre miles de mini-hilos.** Todos resuelven el mismo K-Means que tú ya entiendes.
+
+---
+
+## Parte 10 — Glosario completo
 
 ### Conceptos de K-Means
 
@@ -1243,6 +1318,23 @@ open resultados/speedup.png
 | **Variable local** | Declarada dentro de una función. Existe solo mientras esa función ejecuta. |
 | **Puntero (`*`)** | Variable que guarda la dirección de memoria de otra variable (o el inicio de un bloque), no el valor directamente. |
 | **`const`** | Promesa de que una función no modificará el dato apuntado (solo lo lee). Documenta la intención y previene errores. |
+
+### Conceptos de bibliotecas y mundo real
+
+| Término | Definición |
+|---------|------------|
+| **Biblioteca / Librería** | Colección de código ya hecho y probado que puedes usar sin reescribirlo. |
+| **scikit-learn** | La biblioteca de aprendizaje automático más usada en Python. Su clase `KMeans` hace lo mismo que nuestro `kmeans.c` en pocas líneas. |
+| **k-means++** | Método para elegir centroides iniciales bien separados, en vez de tomar los primeros K puntos. Converge más rápido y mejor. |
+| **Algoritmo de Lloyd** | El K-Means "clásico" de fuerza bruta (el que implementamos): calcula la distancia de cada punto a todos los centroides. |
+| **Algoritmo de Elkan** | Variante de K-Means que usa geometría (desigualdad triangular) para saltarse cálculos de distancia innecesarios. Mismo resultado, menos cuentas. |
+| **Cython** | Lenguaje parecido a Python que se traduce a C. Permite a bibliotecas como scikit-learn usar OpenMP y correr rápido. |
+| **GIL (Global Interpreter Lock)** | Candado interno de Python que impide usar varios hilos de cómputo a la vez. Por eso el trabajo pesado baja a C/Cython. |
+| **joblib** | Herramienta de Python que reparte tareas entre varios procesos. scikit-learn la usa para correr varios reintentos (`n_init`) en paralelo. |
+| **BLAS (OpenBLAS / MKL)** | Bibliotecas de álgebra ultra-optimizadas que hacen muchas operaciones matriciales de golpe. Base de NumPy y scikit-learn. |
+| **GPU / cuML** | La GPU (tarjeta gráfica) tiene miles de mini-hilos. cuML corre K-Means en GPU para datasets enormes. |
+| **Memoria compartida vs. distribuida** | Compartida = hilos en UNA máquina ven la misma RAM (OpenMP). Distribuida = VARIAS máquinas, cada una con su RAM, se comunican por red (MPI, Spark). |
+| **Spark MLlib** | Biblioteca que reparte K-Means entre muchas computadoras (memoria distribuida), cuando los datos no caben en una sola. |
 
 ---
 

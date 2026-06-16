@@ -18,22 +18,25 @@
 \graphicspath{{../resultados/}}
 \usepackage{booktabs}
 \usepackage{amsmath}
-\usepackage{listings}
-\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algorithmic}
 \usepackage{url}
 
-% Estilo para bloques de código
-\lstset{
-  basicstyle=\ttfamily\footnotesize,
-  frame=single,
-  breaklines=true,
-  language=C,
-  keywordstyle=\color{blue},
-  commentstyle=\color{gray},
-  numbers=left,
-  numberstyle=\tiny,
-  xleftmargin=1.5em
-}
+% El informe usa PSEUDOCÓDIGO (no código fuente). Traducimos las
+% palabras clave del paquete algorithmic al español.
+\floatname{algorithm}{Algoritmo}
+\renewcommand{\algorithmicrequire}{\textbf{Entrada:}}
+\renewcommand{\algorithmicensure}{\textbf{Salida:}}
+\renewcommand{\algorithmicif}{\textbf{si}}
+\renewcommand{\algorithmicthen}{\textbf{entonces}}
+\renewcommand{\algorithmicelse}{\textbf{si no}}
+\renewcommand{\algorithmicendif}{\textbf{fin si}}
+\renewcommand{\algorithmicfor}{\textbf{para}}
+\renewcommand{\algorithmicforall}{\textbf{para todo}}
+\renewcommand{\algorithmicdo}{\textbf{hacer}}
+\renewcommand{\algorithmicendfor}{\textbf{fin para}}
+\renewcommand{\algorithmicwhile}{\textbf{mientras}}
+\renewcommand{\algorithmicendwhile}{\textbf{fin mientras}}
 
 % =============================================================
 \begin{document}
@@ -76,7 +79,7 @@ estrategia de distribución adoptada.
 
 \begin{IEEEkeywords}
 Criba de Eratóstenes, MPI, computación paralela, números primos,
-speedup, criba segmentada.
+speedup, criba segmentada, criptografía, primos de Mersenne.
 \end{IEEEkeywords}
 
 % =============================================================
@@ -162,9 +165,13 @@ Tabla~\ref{tab:mpi_ops}.
 \toprule
 \textbf{Operación} & \textbf{Dirección} & \textbf{Propósito} \\
 \midrule
+\texttt{MPI\_Init} & local & Arrancar el entorno MPI \\
+\texttt{MPI\_Comm\_rank} & local & Obtener identificador del proceso \\
+\texttt{MPI\_Comm\_size} & local & Obtener total de procesos \\
 \texttt{MPI\_Bcast} & rank 0 $\to$ todos & Difundir primos base \\
 \texttt{MPI\_Gather} & todos $\to$ rank 0 & Recolectar conteos locales \\
 \texttt{MPI\_Wtime} & local & Medir tiempo de ejecución \\
+\texttt{MPI\_Finalize} & local & Cerrar el entorno MPI \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -176,36 +183,75 @@ múltiplos marcar en su segmento~\cite{gropp1999,quinn2003}.
 
 \subsection{Pseudocódigo}
 
-\begin{lstlisting}[caption={Estructura principal del programa}]
-MPI_Init(...)
-rank = MPI_Comm_rank(...)
-size = MPI_Comm_size(...)
-t_inicio = MPI_Wtime()
+El Algoritmo~\ref{alg:criba} describe la estructura del programa en
+pseudocódigo, independiente de cualquier lenguaje de implementación. Las
+operaciones colectivas de MPI aparecen como pasos descriptivos; su semántica
+se detalla en la Sección~\ref{sec:funciones_mpi}.
 
-// Paso 1: rank 0 calcula primos base
-if (rank == 0)
-    criba_secuencial(base_primes, sqrt(N))
+\begin{algorithm}[h]
+\caption{Criba de Eratóstenes distribuida con MPI}
+\label{alg:criba}
+\begin{algorithmic}[1]
+\REQUIRE Límite superior $N$
+\ENSURE Cantidad total de primos en $[2, N]$
+\STATE Inicializar el entorno MPI \COMMENT{MPI\_Init}
+\STATE $rank \gets$ identificador del proceso \COMMENT{MPI\_Comm\_rank}
+\STATE $size \gets$ número total de procesos \COMMENT{MPI\_Comm\_size}
+\STATE $t_{\text{ini}} \gets$ tiempo actual \COMMENT{MPI\_Wtime}
+\STATE
+\IF{$rank = 0$}
+  \STATE $primos\_base \gets$ criba secuencial sobre $[2, \sqrt{N}]$
+\ENDIF
+\STATE Difundir $base\_count$ desde $rank\,0$ a todos \COMMENT{MPI\_Bcast}
+\STATE Difundir $primos\_base$ desde $rank\,0$ a todos \COMMENT{MPI\_Bcast}
+\STATE
+\STATE $low \gets 2 + rank \cdot (N-1) / size$
+\STATE $high \gets$ fin del segmento de este proceso
+\FOR{cada primo $p \in primos\_base$}
+  \STATE marcar como compuestos los múltiplos de $p$ en $[low, high]$
+\ENDFOR
+\STATE $conteo \gets$ número de no marcados en el segmento
+\STATE
+\STATE Recolectar todos los $conteo$ en $rank\,0$ \COMMENT{MPI\_Gather}
+\STATE $t_{\text{fin}} \gets$ tiempo actual \COMMENT{MPI\_Wtime}
+\IF{$rank = 0$}
+  \STATE imprimir resultados y escribir \texttt{resultados.dat}
+\ENDIF
+\STATE Cerrar el entorno MPI \COMMENT{MPI\_Finalize}
+\end{algorithmic}
+\end{algorithm}
 
-// Paso 2: difundir primos base a todos
-MPI_Bcast(base_count, 1, MPI_INT, 0, ...)
-MPI_Bcast(base_primes, base_count, MPI_INT, 0, ...)
+\subsection{Funciones MPI utilizadas}
+\label{sec:funciones_mpi}
 
-// Paso 3: cada proceso tamiza su segmento
-low  = 2 + rank * (N-1) / size
-high = ...
-for cada primo p en base_primes:
-    marcar_multiplos(p, low, high)
+El programa se apoya en un subconjunto reducido de funciones del estándar
+MPI~\cite{gropp1999,mpiforum2021}. Todas operan sobre el comunicador global
+\texttt{MPI\_COMM\_WORLD}, que agrupa a la totalidad de los procesos lanzados.
+A continuación se describe el propósito de cada una:
 
-// Paso 4: recolectar conteos
-MPI_Gather(conteo_local, ..., conteos, ..., 0, ...)
-
-// Paso 5: rank 0 imprime y escribe resultados.dat
-if (rank == 0):
-    imprimir_resultados()
-    escribir_resultados_dat()
-
-MPI_Finalize()
-\end{lstlisting}
+\begin{itemize}
+  \item \texttt{MPI\_Init} / \texttt{MPI\_Finalize}: arrancan y cierran el
+        entorno de comunicación. La primera debe ser la primera llamada MPI del
+        programa y la segunda la última; todo proceso que inicializa MPI está
+        obligado a finalizarlo para liberar los recursos internos.
+  \item \texttt{MPI\_Comm\_rank}: devuelve el \textit{rank}, el identificador
+        único del proceso dentro del comunicador ($0, 1, \dots, size-1$). Es lo
+        que permite que un mismo binario se comporte distinto en cada proceso.
+  \item \texttt{MPI\_Comm\_size}: devuelve \textit{size}, la cantidad total de
+        procesos. Con él cada proceso calcula el tamaño de su segmento.
+  \item \texttt{MPI\_Bcast}: comunicación colectiva \textit{uno-a-todos}. El
+        proceso raíz ($rank\,0$) difunde un dato y todos los demás reciben una
+        copia idéntica. Aquí transmite los primos base; sin ellos, los procesos
+        $1,2,\dots$ no sabrían qué múltiplos marcar. Todos los procesos deben
+        invocarla con los mismos argumentos, o el programa se bloquea.
+  \item \texttt{MPI\_Gather}: comunicación colectiva \textit{todos-a-uno}, la
+        operación inversa de \texttt{MPI\_Bcast}. Cada proceso envía su conteo
+        local y el raíz los recibe ordenados por \textit{rank} en un arreglo,
+        donde luego los suma para obtener el total.
+  \item \texttt{MPI\_Wtime}: devuelve un instante de tiempo de alta resolución
+        en segundos; la diferencia entre dos llamadas mide el tiempo de
+        ejecución empleado para calcular el \textit{speedup}.
+\end{itemize}
 
 \subsection{Marcado de múltiplos en el segmento}
 
@@ -291,6 +337,84 @@ ideal $S(p) = p$. El speedup real es sublineal debido a:
 \end{figure}
 
 % =============================================================
+\section{Aplicaciones en el mundo real}
+
+Aunque el problema de generar números primos pueda parecer puramente
+académico, tanto el resultado del algoritmo como la técnica de paralelización
+empleada tienen aplicaciones directas en la industria y la ciencia.
+
+\subsection{Aplicaciones de los números primos y la criba}
+
+\begin{itemize}
+  \item \textbf{Criptografía de clave pública (RSA).} La seguridad del
+        criptosistema RSA se basa en la dificultad de factorizar el producto de
+        dos primos grandes: multiplicar dos primos de cientos de dígitos es
+        trivial, pero recuperar los factores a partir del producto es
+        computacionalmente inviable~\cite{knuth1997}. Generar esas claves exige
+        producir y verificar números primos muy grandes, tarea para la que las
+        cribas (combinadas con tests de primalidad) son un primer filtro
+        eficiente.
+  \item \textbf{Firmas digitales y certificados.} Los esquemas de firma
+        (RSA, DSA) y la infraestructura de certificados que sustenta HTTPS y la
+        banca en línea descansan sobre la misma aritmética modular de números
+        primos.
+  \item \textbf{Funciones y tablas hash.} Es habitual usar tamaños de tabla y
+        módulos primos para dispersar las claves de manera uniforme y reducir
+        colisiones, lo que mejora el rendimiento de estructuras de datos
+        fundamentales.
+  \item \textbf{Generadores de números pseudoaleatorios.} Muchos generadores
+        (p.\,ej.\ congruenciales lineales) emplean módulos primos para
+        maximizar el período de la secuencia generada.
+  \item \textbf{Códigos de detección y corrección de errores} y otras áreas de
+        la teoría de números computacional emplean aritmética sobre cuerpos
+        finitos de orden primo.
+\end{itemize}
+
+\subsection{Cómputo intensivo de primos: proyectos de cálculo distribuido}
+
+El mismo patrón empleado en este trabajo —repartir el rango entre procesos
+(\textit{scatter}), cribar localmente (\textit{compute}) y recolectar
+(\textit{gather})— es la base de varios proyectos reales de investigación en
+teoría de números, donde el volumen de cómputo obliga a paralelizar y a apoyarse
+en cribas:
+
+\begin{itemize}
+  \item \textbf{GIMPS (\textit{Great Internet Mersenne Prime Search}).} Búsqueda
+        distribuida de primos de Mersenne, de la forma $2^p - 1$. Los mayores
+        primos conocidos pertenecen a esta familia: el récord actual supera los
+        $41$ millones de dígitos~\cite{gimps}. Miles de computadoras voluntarias
+        se reparten los exponentes candidatos. Las cribas intervienen al generar
+        y pre-filtrar dichos exponentes (que deben ser primos) y en el
+        \textit{trial factoring}; la confirmación final de primalidad se realiza
+        con el test de Lucas--Lehmer.
+  \item \textbf{PrimeGrid.} Proyecto de cómputo distribuido cuyos subproyectos de
+        \textit{sieving} ejecutan, literalmente, cribas para descartar candidatos
+        con factores pequeños antes de los tests de primalidad. Es el análogo más
+        directo a la criba segmentada de este trabajo, repartida entre nodos de
+        todo el mundo para hallar primos gemelos, de Sophie Germain, primoriales
+        y factoriales.
+  \item \textbf{Verificación de conjeturas.} La conjetura de Goldbach se ha
+        verificado computacionalmente hasta $4\times10^{18}$~\cite{oliveira2014}
+        y la de los primos gemelos hasta cotas igualmente enormes. Ello exige
+        \emph{generar todos los primos} hasta esos límites mediante cribas
+        segmentadas paralelas, exactamente la técnica aquí implementada.
+  \item \textbf{Cálculo de $\pi(x)$ y brechas entre primos.} Determinar la
+        función de conteo de primos o localizar brechas récord (\textit{prime
+        gaps}) obliga a tamizar rangos colosales, una tarea naturalmente
+        paralelizable por segmentos.
+  \item \textbf{Factorización mediante cribas.} Los algoritmos de factorización
+        más potentes —la criba del cuerpo de números (GNFS) y la criba
+        cuadrática— son, en esencia, cribas masivamente paralelas. Con ellas se
+        factorizó RSA-250 en 2020. Esto cierra el círculo con la criptografía:
+        romper RSA es, en la práctica, otra gran criba distribuida.
+\end{itemize}
+
+En todos estos casos, la criba segmentada distribuida de este trabajo —con un
+resultado verificable, $\pi(10^7)=664{,}579$— constituye una versión a pequeña
+escala del mismo patrón que la investigación matemática lleva hasta límites de
+$10^{18}$ y más allá.
+
+% =============================================================
 \section{Conclusiones}
 
 Se implementó exitosamente la Criba de Eratóstenes distribuida utilizando
@@ -358,6 +482,17 @@ Cambridge, MA: MIT Press, 1996.
 P.~Pritchard,
 ``Explaining the wheel factorization,''
 \textit{BIT Numerical Mathematics}, vol. 22, no. 4, pp. 442--454, 1982.
+
+\bibitem{gimps}
+Great Internet Mersenne Prime Search (GIMPS),
+``Distributed computing project to search for Mersenne prime numbers.''
+[Online]. Available: \url{https://www.mersenne.org/}
+
+\bibitem{oliveira2014}
+T.~Oliveira e Silva, S.~Herzog, and S.~Pardi,
+``Empirical verification of the even Goldbach conjecture and computation of
+prime gaps up to $4\cdot10^{18}$,''
+\textit{Mathematics of Computation}, vol. 83, no. 288, pp. 2033--2060, 2014.
 
 \end{thebibliography}
 

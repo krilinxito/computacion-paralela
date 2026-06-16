@@ -151,6 +151,28 @@ Para $N{=}10^6$, el arreglo de datos ocupa
 $10^6 \times 16 \times 8\,\text{bytes} \approx 128$~MB, por lo que se reserva
 din\'amicamente en el \emph{heap} y se organiza como un \'unico arreglo lineal
 contiguo.
+El Algoritmo~\ref{alg:gen} describe el procedimiento en lenguaje corriente,
+sin detalles de implementaci\'on.
+
+\begin{algorithm}[H]
+\caption{Generaci\'on de datos sint\'eticos gaussianos}
+\label{alg:gen}
+\begin{algorithmic}[1]
+\REQUIRE n\'umero de puntos $N$, dimensiones $D$, clusters $K$
+\ENSURE conjunto de puntos $X=\{x_1,\ldots,x_N\}$
+\STATE Fijar la semilla del generador aleatorio en un valor constante (42)
+\FOR{\textbf{cada} punto $i \in \{1,\ldots,N\}$}
+  \STATE $c \gets i \bmod K$ \quad\textit{// asignaci\'on c\'iclica de cluster}
+  \FOR{\textbf{cada} dimensi\'on $d \in \{1,\ldots,D\}$}
+    \STATE Tomar dos n\'umeros uniformes $u_1, u_2 \in (0,1]$
+    \STATE $g \gets \sqrt{-2\ln u_1}\,\cos(2\pi u_2)$
+           \quad\textit{// ruido gaussiano (Box-Muller)}
+    \STATE $x_{i,d} \gets 10c + g$
+           \quad\textit{// desplazar al centro del cluster $c$}
+  \ENDFOR
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
 
 \subsection{Algoritmo K-Means}
 
@@ -222,6 +244,44 @@ La actualizaci\'on de centroides se mantiene serial por dos razones:
 (b) requiere acumular sumas por cluster, introduciendo dependencias de datos
 que exigir\'ian una operaci\'on de reducci\'on y complicar\'ian la
 implementaci\'on sin ganancia apreciable.
+
+\subsection{De las Directivas al Lenguaje Corriente}
+
+La virtud de OpenMP es que la paralelizaci\'on se expresa con \emph{directivas
+de compilador}: anotaciones que se a\~naden sobre los bucles ya existentes sin
+reescribir el algoritmo. El compilador, al verlas, genera autom\'aticamente el
+c\'odigo que crea los hilos, reparte el trabajo y los sincroniza. Por ello el
+mismo programa, compilado sin soporte de OpenMP, se ejecuta de forma puramente
+secuencial. La Tabla~\ref{tab:traduccion} traduce las construcciones empleadas
+en la implementaci\'on a su significado en lenguaje corriente.
+
+\begin{table}[H]
+  \centering
+  \caption{Construcciones de implementaci\'on y su significado}
+  \label{tab:traduccion}
+  \begin{tabular}{p{0.30\columnwidth}p{0.58\columnwidth}}
+    \toprule
+    \textbf{Construcci\'on} & \textbf{Significado en lenguaje corriente} \\
+    \midrule
+    Directiva de bucle paralelo con reparto est\'atico
+      & Las $N$ iteraciones se dividen en bloques iguales y se asigna un bloque
+        a cada hilo del equipo. \\
+    Barrera impl\'icita al cerrar el bucle
+      & Todos los hilos esperan a terminar su parte antes de continuar a la
+        fase siguiente. \\
+    Fijar el n\'umero de hilos
+      & Se establece cu\'antos hilos ($p = 1, 2, 4$) trabajar\'an en paralelo. \\
+    Reloj de pared de alta resoluci\'on
+      & Se mide el tiempo transcurrido real (\emph{wall-clock}) de cada corrida. \\
+    Reserva din\'amica de memoria
+      & Se solicita memoria en tiempo de ejecuci\'on para los datos
+        ($\approx 128$~MB con $N{=}10^6$), imposible de fijar de antemano. \\
+    Restauraci\'on de centroides iniciales
+      & Antes de cada corrida se copian los centroides de partida, garantizando
+        que todas las pruebas arranquen del mismo estado. \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \subsection{Protocolo de Medici\'on}
 
@@ -352,6 +412,71 @@ de este estudio, se sit\'ua en el orden de $N \sim 10^3$--$10^4$, por debajo
 del cual la paralelizaci\'on es contraproducente.
 
 % --------------------------------------------------------------------------
+\section{K-Means y Paralelismo en Bibliotecas de Producci\'on}
+\label{sec:bibliotecas}
+
+La implementaci\'on desarrollada en este trabajo es did\'actica, pero las ideas
+que la sustentan son exactamente las que emplean las bibliotecas de aprendizaje
+autom\'atico de uso masivo. A continuaci\'on se describe c\'omo lo resuelve la
+m\'as difundida, \textbf{scikit-learn}, y se contrasta con nuestro enfoque.
+
+\subsection{scikit-learn (Python)}
+
+La clase \texttt{KMeans} de scikit-learn \cite{pedregosa2011} es la
+implementaci\'on de referencia en Python. Aunque se invoca desde un lenguaje
+interpretado, su n\'ucleo no est\'a escrito en Python puro: las partes costosas
+est\'an programadas en \textbf{Cython} (un dialecto que se compila a C), y las
+operaciones algebraicas se delegan en bibliotecas \textbf{BLAS} optimizadas
+(OpenBLAS o Intel MKL). Sus rasgos principales son:
+
+\begin{itemize}
+  \item \textbf{Inicializaci\'on inteligente (k-means++).} En lugar de tomar
+        centroides arbitrarios, elige los puntos de partida de forma que queden
+        bien separados \cite{arthur2007}, lo que reduce el n\'umero de
+        iteraciones y mejora la calidad del resultado. Adem\'as repite el
+        proceso varias veces (\texttt{n\_init}) y conserva la mejor soluci\'on.
+  \item \textbf{Algoritmo de Elkan.} Adem\'as del cl\'asico de Lloyd (el que
+        implementamos aqu\'i), ofrece la variante de Elkan \cite{elkan2003}, que
+        usa la desigualdad triangular para \emph{descartar} c\'alculos de
+        distancia innecesarios, acelerando la fase de asignaci\'on en datos de
+        baja dimensi\'on.
+  \item \textbf{Paralelismo en dos niveles.} Las b\'usquedas independientes de
+        \texttt{n\_init} se reparten entre procesos con la biblioteca
+        \textbf{joblib}; y, en las versiones recientes, los bucles internos de
+        asignaci\'on est\'an paralelizados con \textbf{OpenMP} dentro del
+        c\'odigo Cython, controlables con la variable de entorno
+        \texttt{OMP\_NUM\_THREADS}.
+\end{itemize}
+
+\subsection{Similitudes y diferencias con nuestro trabajo}
+
+La coincidencia de fondo es notable: \textbf{scikit-learn paraleliza la fase de
+asignaci\'on con OpenMP, igual que nosotros}. Comparte el modelo de
+\emph{memoria compartida}, el reparto de los $N$ puntos entre los hilos, el
+car\'acter \emph{embarrassingly parallel} de la asignaci\'on y la misma
+complejidad $O(N\cdot K\cdot D)$. Lo que aprendimos aqu\'i es, a peque\~na
+escala, lo que ocurre dentro de una herramienta de producci\'on.
+
+Las diferencias son de madurez ingenieril, no de principio:
+inicializaci\'on k-means++ frente a tomar los primeros $K$ puntos; algoritmo de
+Elkan frente a fuerza bruta; aritm\'etica vectorizada sobre BLAS y soporte de
+precisi\'on simple (\texttt{float32}) frente a nuestro c\'alculo directo en
+doble precisi\'on; y m\'ultiples reinicios autom\'aticos frente a una \'unica
+corrida.
+
+\subsection{Otras bibliotecas y paradigmas}
+
+El mismo problema se ataca con distintos modelos de paralelismo seg\'un la
+escala: \textbf{NumPy} y \textbf{SciPy} se apoyan en BLAS multihilo (MKL,
+OpenBLAS) para vectorizar las operaciones matriciales subyacentes;
+\textbf{cuML} (del ecosistema RAPIDS) ejecuta K-Means en \textbf{GPU}, donde
+miles de hilos procesan los puntos simult\'aneamente; y \textbf{Spark MLlib}
+lo lleva a un cl\'uster de varias m\'aquinas con \textbf{memoria distribuida},
+un paradigma an\'alogo a MPI en el que cada nodo procesa una porci\'on de los
+datos y los resultados parciales se combinan por comunicaci\'on, en contraste
+con la memoria compartida de OpenMP empleada en este trabajo.
+
+% --------------------------------------------------------------------------
 \section{Conclusiones}
 \label{sec:conclusiones}
 
@@ -419,6 +544,24 @@ G.~M. Amdahl,
 computing capabilities,''
 en \textit{Proc. AFIPS Spring Joint Comput. Conf.},
 vol.~30, abr. 1967, pp.~483--485.
+
+\bibitem{pedregosa2011}
+F.~Pedregosa \textit{et al.},
+``Scikit-learn: Machine learning in Python,''
+\textit{J. Mach. Learn. Res.},
+vol.~12, pp.~2825--2830, 2011.
+
+\bibitem{arthur2007}
+D.~Arthur y S.~Vassilvitskii,
+``k-means++: The advantages of careful seeding,''
+en \textit{Proc. 18th Annu. ACM-SIAM Symp. Discrete Algorithms (SODA)},
+2007, pp.~1027--1035.
+
+\bibitem{elkan2003}
+C.~Elkan,
+``Using the triangle inequality to accelerate k-means,''
+en \textit{Proc. 20th Int. Conf. Machine Learning (ICML)},
+2003, pp.~147--153.
 
 \end{thebibliography}
 

@@ -1109,6 +1109,177 @@ make clean
 
 ---
 
+## PARTE 9: Aplicaciones en la vida real
+
+Hasta aquí aprendimos a encontrar primos en paralelo. Pero, ¿esto para qué sirve
+**de verdad**? Resulta que tanto los **números primos** como la **técnica de
+repartir trabajo entre procesos** están detrás de cosas que usas todos los días.
+Vamos por partes.
+
+### 9.1 ¿Para qué sirven los números primos?
+
+Los primos parecen un juego matemático, pero son la base de la seguridad de
+internet. Aquí los usos más importantes:
+
+#### a) Criptografía RSA — la seguridad de tu banco y WhatsApp
+
+Cada vez que entras a una página con candado (HTTPS), compras en línea o mandas
+un mensaje cifrado, hay números primos trabajando por detrás. El sistema más
+famoso se llama **RSA**, y su idea es sorprendentemente simple:
+
+```
+Multiplicar es FÁCIL:       61 × 53 = 3233    (lo haces en segundos)
+Factorizar es DIFÍCIL:      3233 = ¿? × ¿?    (¿qué dos primos lo forman?)
+```
+
+Con números chicos como 3233 es fácil adivinar (61 y 53). Pero RSA usa primos de
+**300 dígitos o más**. Multiplicarlos es instantáneo, pero hacer el camino
+inverso —descubrir qué dos primos se multiplicaron— le tomaría a la
+computadora más potente del mundo **millones de años**.
+
+```
+Analogía: es como mezclar dos colores de pintura.
+  Mezclar azul + amarillo = verde    → instantáneo
+  "Des-mezclar" el verde de vuelta a azul + amarillo → casi imposible
+```
+
+Esa asimetría (fácil en un sentido, imposible en el otro) es lo que mantiene
+seguros tus datos. Y para crear las claves se necesitan **primos grandes**, que
+se buscan con técnicas emparentadas con la criba que programamos.
+
+#### b) Firmas digitales y certificados
+
+La misma matemática de primos permite **firmar** documentos digitalmente: probar
+que un mensaje viene de quien dice venir y que nadie lo alteró. Los certificados
+que validan que "esta página es realmente la de tu banco" usan firmas basadas en
+primos.
+
+#### c) Funciones hash y tablas hash
+
+Una **tabla hash** es una estructura para guardar y buscar datos muy rápido
+(la usan bases de datos, diccionarios de programación, cachés). Para repartir los
+datos de forma pareja y evitar choques, es común usar un **tamaño primo** de
+tabla:
+
+```
+Si la tabla tiene tamaño 100 (no primo), muchas claves caen en las mismas casillas.
+Si la tabla tiene tamaño 101 (primo), las claves se reparten mucho más parejo.
+```
+
+#### d) Generadores de números aleatorios
+
+Los videojuegos, simulaciones y sorteos necesitan números "al azar". Muchos
+generadores usan **módulos primos** en sus fórmulas para que la secuencia de
+números tarde lo máximo posible en repetirse.
+
+**Resumen 9.1:** los primos no son un juego — son el cimiento de la criptografía
+que protege bancos, mensajería y comercio electrónico.
+
+### 9.2 Cazadores de primos gigantes: la criba a escala mundial
+
+Lo más valioso que aprendiste **no es la criba en sí**, sino el **patrón** de
+trabajo en paralelo. Lo hiciste en 3 movimientos:
+
+```
+1. REPARTIR  → cada proceso recibió un pedazo del rango [2, N]   (scatter)
+2. CALCULAR  → cada uno tamizó su pedazo solo, sin molestar a nadie  (compute)
+3. JUNTAR    → rank 0 recolectó los conteos con MPI_Gather        (gather)
+```
+
+Pues bien: existen proyectos **reales** de investigación matemática que hacen
+exactamente esto, pero con miles o millones de computadoras y números
+descomunales. Tú lo hiciste hasta 10 millones; ellos llegan hasta números con
+**millones de dígitos**. El problema es tan grande que **obligatoriamente** hay
+que repartirlo y apoyarse en cribas.
+
+#### a) GIMPS — la cacería de los primos de Mersenne
+
+Un **primo de Mersenne** es un primo de la forma `2^p − 1` (2 elevado a una
+potencia, menos 1):
+
+```
+2^2  − 1 = 3      ✓ primo
+2^3  − 1 = 7      ✓ primo
+2^5  − 1 = 31     ✓ primo
+2^7  − 1 = 127    ✓ primo
+2^11 − 1 = 2047 = 23 × 89   ✗ NO primo (ojo: no todo 2^p−1 es primo)
+```
+
+Resulta que **los números primos más grandes que conoce la humanidad son de
+Mersenne**. El récord actual tiene **más de 41 millones de dígitos** (si lo
+imprimieras, llenarías miles de libros).
+
+¿Cómo se encuentran? Con **GIMPS** (*Great Internet Mersenne Prime Search*), un
+proyecto mundial donde **miles de voluntarios** prestan sus computadoras. El
+sistema central reparte exponentes candidatos `p` entre todos —igual que tú
+repartiste rangos— y cada quien trabaja el suyo.
+
+```
+Tu criba:    repartiste rangos de números     [2..2.5M] [2.5M..5M] ...
+GIMPS:       reparte exponentes candidatos      p=1000   p=1001   p=1002 ...
+Mismo patrón: repartir → calcular → reportar.
+```
+
+**¿Dónde entra la criba?** Antes de hacer el test caro, se usan cribas para
+**descartar candidatos** rápidamente: los exponentes `p` tienen que ser primos
+(¡se generan con una criba como la tuya!) y se eliminan los que tienen factores
+pequeños (*trial factoring*). El veredicto final de primalidad se da con un test
+especial (Lucas–Lehmer), pero **la criba es el filtro que ahorra el 99% del
+trabajo**.
+
+#### b) PrimeGrid — la criba distribuida en estado puro
+
+**PrimeGrid** es otro proyecto mundial, y aquí la conexión es todavía más directa:
+tiene subproyectos que se llaman literalmente **"sieving"** (tamizado/criba). Su
+trabajo es **exactamente el tuyo**, pero repartido entre computadoras de todo el
+planeta: cribar rangos enormes para tachar los candidatos con factores pequeños,
+antes de probar cuáles son realmente primos. Así buscan primos gemelos, primos de
+Sophie Germain y otras familias especiales.
+
+> Si entendiste la criba de este proyecto, entendiste el corazón de lo que hace
+> PrimeGrid. La única diferencia es la escala.
+
+#### c) Probar conjeturas famosas hasta números gigantes
+
+Hay preguntas sobre primos que llevan **siglos** sin demostrarse. Mientras los
+matemáticos buscan la prueba, las computadoras las **verifican** hasta números
+enormes:
+
+- **Conjetura de Goldbach** ("todo par > 2 es suma de dos primos"): verificada
+  por computadora hasta **4,000,000,000,000,000,000** (4 trillones).
+- **Conjetura de los primos gemelos** (parejas como 11 y 13, 17 y 19): verificada
+  hasta cotas igual de enormes.
+
+Para comprobar esto **hay que generar TODOS los primos** hasta esos límites... y
+eso se hace con **cribas segmentadas en paralelo**, exactamente la técnica de
+este proyecto. Sin repartir el trabajo, sería imposible.
+
+#### d) Romper la criptografía... también es una criba
+
+¿Recuerdas que RSA (sección 9.1) es seguro porque factorizar es difícil? Pues los
+algoritmos **más potentes** para factorizar números enormes se llaman, otra vez,
+**cribas**: la *criba del cuerpo de números* (GNFS) y la *criba cuadrática*. Son
+cribas mucho más sofisticadas que la de Eratóstenes, pero comparten la idea de
+tachar candidatos en paralelo. Con ellas se logró factorizar **RSA-250** (un
+número de 250 dígitos) en 2020, usando cientos de computadoras durante meses.
+
+```
+Los primos PROTEGEN la información   → construir claves RSA (sección 9.1)
+Las cribas distribuidas la ATACAN    → factorizar para romper RSA
+Las dos caras de la misma moneda, ambas con cribas y paralelismo.
+```
+
+---
+
+**La gran conclusión:** programaste una criba de primos hasta 10 millones, pero
+en realidad aprendiste el **mismo patrón** (`Bcast` para repartir + cálculo local
++ `Gather` para juntar) que usan los proyectos que cazan los primos más grandes
+del mundo, verifican conjeturas centenarias y ponen a prueba la criptografía. Lo
+tuyo es la versión de bolsillo —pequeña y verificable ($\pi(10^7)=664{,}579$)— de
+algo que se ejecuta a escala planetaria.
+
+---
+
 ## Glosario completo
 
 | Término | Significado en lenguaje simple |
@@ -1142,3 +1313,12 @@ make clean
 | **mpirun** | Lanzador de procesos MPI. `mpirun -np 4 ./criba` crea 4 procesos en el computador actual. |
 | **wrapper** | Un programa que "envuelve" a otro agregando funcionalidad extra. `mpicc` envuelve a `gcc`. |
 | **memory leak** | Error de programación: reservar memoria con malloc/calloc y no librarla con free. La memoria queda "perdida". |
+| **RSA** | Sistema de criptografía de clave pública basado en lo difícil que es factorizar el producto de dos primos grandes. Protege HTTPS, bancos y mensajería. |
+| **criptografía** | Técnicas para proteger información (cifrarla, firmarla). La de clave pública moderna depende de números primos grandes. |
+| **cluster** | Conjunto de computadoras conectadas por red que trabajan juntas como una sola máquina grande. MPI es el estándar para programarlas. |
+| **scatter / gather** | Patrón base del cómputo paralelo: *scatter* = repartir pedazos del trabajo entre procesos; *gather* = recolectar los resultados parciales. |
+| **primo de Mersenne** | Primo de la forma `2^p − 1` (ej: 3, 7, 31, 127). Los primos más grandes conocidos son de Mersenne; el récord supera los 41 millones de dígitos. |
+| **GIMPS** | *Great Internet Mersenne Prime Search*: proyecto mundial de cómputo distribuido que busca primos de Mersenne repartiendo candidatos entre miles de voluntarios. |
+| **PrimeGrid** | Proyecto de cómputo distribuido que ejecuta cribas (*sieving*) a escala mundial para buscar primos gemelos, de Sophie Germain y otras familias. |
+| **criba del cuerpo de números (GNFS)** | El algoritmo más potente para factorizar enteros enormes. Es una "criba" sofisticada y masivamente paralela; se usó para romper RSA-250. |
+| **conjetura de Goldbach** | Afirmación (no demostrada) de que todo número par > 2 es suma de dos primos. Verificada por computadora hasta 4×10¹⁸ usando cribas paralelas. |

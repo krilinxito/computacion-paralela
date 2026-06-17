@@ -479,9 +479,11 @@ Cada proceso solo necesita memoria para su porción: ~2.5 MB en vez de los 10 MB
 que necesitaría un proceso secuencial. Con N=1,000,000,000 esto se vuelve crítico:
 un proceso secuencial necesitaría 1 GB, pero 100 procesos solo 10 MB cada uno.
 
-### 4.2 La fórmula de distribución — paso a paso
+### 4.2 La fórmula de distribución — de dónde sale, paso a paso
 
-El código calcula `low` (inicio) y `high` (fin) del segmento de cada proceso:
+Esta es **la** fórmula que más se pregunta. Aquí no la vamos a memorizar: la vamos
+a **construir desde cero**, para que la puedas reconstruir tú solo aunque olvides
+el código exacto.
 
 ```c
 long long low  = 2 + (long long)rank * (N - 1) / size;
@@ -490,7 +492,122 @@ long long high = (rank == size - 1)
                  : 2 + (long long)(rank + 1) * (N - 1) / size - 1;
 ```
 
-Aplicando con rank=1, size=4, N=10,000,000:
+#### Paso 0 — ¿Qué problema estamos resolviendo?
+
+Tenemos que repartir el rango de números `[2, N]` entre `size` procesos. Queremos:
+
+- **Bloques contiguos:** cada proceso se queda con un tramo seguido de números
+  (proceso 0 el primer tramo, proceso 1 el siguiente, etc.).
+- **Tamaños lo más parejos posible:** que ninguno trabaje mucho más que otro.
+- **Sin huecos ni solapes:** cada número del 2 al N debe pertenecer a **exactamente
+  un** proceso. Ni que se pierda ninguno, ni que dos procesos se peleen por el mismo.
+
+Cada proceso solo necesita calcular dos números: su `low` (dónde empieza su tramo)
+y su `high` (dónde termina). Vamos a deducir cada pieza de la fórmula.
+
+#### Paso 1 — ¿Cuántos números hay que repartir? → de aquí sale el `N-1`
+
+El rango `[2, N]` (del 2 al N, **ambos incluidos**) no tiene N números, tiene `N-1`.
+Regla de "contar inclusive": `cantidad = último - primero + 1`.
+
+```
+cantidad = N - 2 + 1 = N - 1
+```
+
+Verifícalo con un caso chiquito, N=10 → rango `[2 .. 10]`:
+
+```
+2, 3, 4, 5, 6, 7, 8, 9, 10   →  son 9 números  =  N - 1  =  10 - 1  ✓
+```
+
+Por eso en la fórmula aparece `N - 1` y no `N`: **es la cantidad total de números
+que hay que repartir**, no es un "menos uno" arbitrario.
+
+#### Paso 2 — Repartir T elementos en `size` bloques (la idea general)
+
+Olvidemos por un momento que los números empiezan en 2. Imagina que tienes `T`
+elementos numerados con un **offset** desde 0: `0, 1, 2, ..., T-1`. La forma estándar
+de partirlos en `size` bloques parejos es: al proceso `i` le toca el tramo de offsets
+
+```
+[  i * T / size  ,  (i+1) * T / size  )      ← división entera, fin no incluido
+```
+
+Es decir, el inicio de cada proceso es `i * T / size`, y termina justo donde empieza
+el siguiente. Con `T = N-1` (lo del Paso 1), el **offset de inicio** del proceso
+`rank` es:
+
+```
+offset_inicio = rank * (N - 1) / size
+```
+
+#### Paso 3 — Trasladar el offset al número real → de aquí sale el `+2`
+
+El offset cuenta desde 0, pero nuestros números **empiezan en 2** (el 0 y el 1 no
+son primos, no entran). Así que para pasar de "offset" a "número real" sumamos el
+desplazamiento base, que es 2:
+
+```
+low = 2 + offset_inicio = 2 + rank * (N - 1) / size
+```
+
+Ese `2 +` es exactamente el `+2` de la fórmula: **convierte un conteo que arranca en
+0 en un número que arranca en 2.** (Si el primer proceso, rank=0, calcula
+`low = 2 + 0 = 2`, justo el comienzo del rango. ✓)
+
+#### Paso 4 — De dónde sale `high`
+
+Como los bloques son **contiguos**, el final de mi tramo es simplemente *el inicio
+del siguiente proceso, menos 1*:
+
+```
+high(rank) = low(rank + 1) - 1
+           = ( 2 + (rank+1) * (N-1) / size ) - 1
+```
+
+Que es, palabra por palabra, la rama larga del código:
+`2 + (rank + 1) * (N - 1) / size - 1`.
+
+Esto es lo que **garantiza que no haya huecos ni solapes**: por construcción,
+`high` de un proceso y `low` del siguiente quedan pegados:
+
+```
+low(rank+1)  =  high(rank) + 1      ← son números consecutivos, sin saltarse nada
+```
+
+#### Paso 5 — Por qué el ÚLTIMO proceso usa `high = N` (el caso especial)
+
+La división `(N-1) / size` es **entera**: trunca (tira) la parte decimal. Cuando
+`N-1` no es múltiplo exacto de `size`, los bloques se quedan un poquito cortos y
+**sobran números al final** (el "resto" de la división).
+
+Ejemplo a propósito que NO divide exacto: N=10, size=4 → hay `N-1 = 9` números para
+4 procesos. `9 / 4 = 2` (entero). Si todos los bloques midieran 2:
+
+```
+Proceso 0: offset [0,2)  → números 2, 3
+Proceso 1: offset [2,4)  → números 4, 5
+Proceso 2: offset [4,6)  → números 6, 7
+Proceso 3: offset [6,8)  → números 8, 9      ← ¡pero N=10 se quedó fuera!
+```
+
+4 bloques × 2 = 8 números cubiertos, pero teníamos 9 → **falta el 10**. Para que no
+se pierda nada, el código fuerza que el último proceso llegue siempre hasta N:
+
+```c
+high = (rank == size - 1) ? N : <fórmula normal>;
+```
+
+Así el proceso 3 absorbe el resto y termina en `high = N = 10`. El `? :` es un
+"if compacto":
+
+- **Si soy el último** (`rank == size - 1`) → `high = N` (cubro hasta el final pase
+  lo que pase).
+- **Si no** → uso la fórmula del Paso 4 (mi fin pegado al inicio del siguiente).
+
+#### Paso 6 — Verificación: aplicación con N=10,000,000, size=4
+
+Aplicando todo lo anterior con rank=1:
 
 ```
 low  = 2 + 1 * (10,000,000 - 1) / 4
@@ -505,11 +622,20 @@ high = 2 + (1+1) * 9,999,999 / 4 - 1
      = 5,000,000
 ```
 
-El Proceso 1 trabaja en el rango [2,500,001 ... 5,000,000].
+El Proceso 1 trabaja en el rango [2,500,001 ... 5,000,000]. Y haciendo lo mismo para
+los 4 procesos se ve que encajan perfecto, sin huecos ni solapes, y el último cierra
+en N:
 
-El `? :` en el código es un "if compacto":
-- Si soy el último proceso (`rank == size - 1`), mi `high = N` (llego hasta el final)
-- Si no, uso la fórmula (para no dejar un hueco entre mi fin y el inicio del siguiente)
+```
+Proceso 0: low=2          high=2,500,000
+Proceso 1: low=2,500,001  high=5,000,000     ← 2,500,001 = 2,500,000 + 1  (pegado)
+Proceso 2: low=5,000,001  high=7,500,000     ← 5,000,001 = 5,000,000 + 1  (pegado)
+Proceso 3: low=7,500,001  high=10,000,000    ← high = N  (último, caso especial)
+```
+
+Fíjate en la columna de la derecha: cada `low` es el `high` anterior **+1**
+(`low(i+1) = high(i) + 1`), y el último `high` es exactamente N. Eso es la prueba de
+que la repartición es correcta.
 
 ### 4.3 El truco del índice local — el concepto más importante
 

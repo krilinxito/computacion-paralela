@@ -15,6 +15,10 @@
 \usepackage{algorithm}
 \usepackage{algorithmic}
 
+% Ajuste de espaciado general de pagina para que el bloque de resumenes
+% biling\"ue quepa holgadamente en la primera columna.
+\addtolength{\textheight}{14pt}
+
 % Compilar con:  pdflatex informe_ieee.tex  (ejecutar dos veces)
 % Requiere: IEEEtran.cls  ->  sudo dnf install texlive-ieeetran
 %           speedup.png y scaling.png  ->  gnuplot graficar.gp
@@ -22,7 +26,7 @@
 \begin{document}
 
 % --------------------------------------------------------------------------
-\title{Paralelizaci\'on del Algoritmo K-Means con OpenMP:\\
+\title{\LARGE Paralelizaci\'on del Algoritmo K-Means con OpenMP:\\
        An\'alisis de Escalabilidad con Datos Sint\'eticos Masivos}
 
 \author{%
@@ -33,18 +37,20 @@
     Maximiliano G\'omez Mallo$^{4}$%
   }\\[4pt]
   \IEEEauthorblockA{%
-    Carrera de Inform\'atica,
-    Universidad Mayor de San Andr\'es\\
+    Estudiantes de la Carrera de Inform\'atica\\
+    Universidad Mayor de San Andr\'es, La Paz, Bolivia\\
     $^{1}$6721489\quad
     $^{2}$6783133\quad
     $^{3}$9939515\quad
-    $^{4}$14480221%
+    $^{4}$14480221\\[3pt]
+    Junio de 2026%
   }
 }
 
 \maketitle
 
 % --------------------------------------------------------------------------
+\renewcommand{\abstractname}{Resumen}
 \begin{abstract}
 El algoritmo K-Means es una de las t\'ecnicas de agrupamiento no supervisado
 m\'as utilizadas en aprendizaje autom\'atico y an\'alisis de datos.
@@ -65,11 +71,46 @@ Se identifica emp\'iricamente el \emph{umbral de paralelizaci\'on}: el
 tama\~no de problema a partir del cual la paralelizaci\'on resulta
 beneficiosa.
 \end{abstract}
-
+\renewcommand{\IEEEkeywordsname}{Palabras clave}
 \begin{IEEEkeywords}
 K-Means, OpenMP, Computaci\'on Paralela, Datos Sint\'eticos, Speedup,
 Ley de Amdahl, Escalabilidad, Memoria Compartida
 \end{IEEEkeywords}
+
+\vfill
+
+% --- Versi\'on en ingl\'es ---------------------------------------------------
+{\centering\normalsize\textbf{\textit{Parallelization of the K-Means Algorithm
+with OpenMP: Scalability Analysis with Massive Synthetic Data}}\par}
+\vspace{2pt}
+
+\renewcommand{\abstractname}{Abstract}
+\begin{abstract}
+The K-Means algorithm is one of the most widely used unsupervised clustering
+techniques in machine learning and data analysis.
+Its assignment phase, which computes the distance from each point to every
+centroid, is the computational bottleneck and scales linearly with the dataset
+size.
+In this work K-Means is implemented in the C language, parallelizing the
+assignment phase with OpenMP on a shared-memory system.
+Unlike small didactic datasets (such as Iris, with 150 instances), where thread
+\emph{overhead} prevents any observable speedup, here Gaussian synthetic data
+generated with the Box-Muller transform are used, with sizes $N$ ranging from
+$10^4$ to $10^6$ points, $D{=}16$ dimensions and $K{=}10$ clusters.
+The results show a \emph{speedup} of up to $\sim 2.85\times$ with 4 threads for
+$N{=}10^6$, in agreement with the prediction of Amdahl's Law for a parallel
+fraction $P \approx 0.91$.
+The \emph{parallelization threshold} is identified empirically: the problem size
+above which parallelization becomes beneficial.
+\end{abstract}
+\renewcommand{\IEEEkeywordsname}{Keywords}
+\begin{IEEEkeywords}
+K-Means, OpenMP, Parallel Computing, Synthetic Data, Speedup, Amdahl's Law,
+Scalability, Shared Memory
+\end{IEEEkeywords}
+
+\vfill
+\newpage
 
 % --------------------------------------------------------------------------
 \section{Introducci\'on}
@@ -499,6 +540,10 @@ Este resultado subraya la importancia de evaluar la efectividad de la
 paralelizaci\'on en la escala de datos para la que el sistema fue dise\~nado.
 
 \bibliographystyle{IEEEtran}
+
+% Reparte las referencias en dos columnas balanceadas en la ultima pagina
+% (corta justo antes de la referencia indicada).
+\IEEEtriggeratref{8}
 
 \begin{thebibliography}{7}
 

@@ -22,6 +22,10 @@
 \usepackage{algorithmic}
 \usepackage{url}
 
+% Ajuste de espaciado general de página para que el bloque de resúmenes
+% bilingüe quepa holgadamente en la primera columna.
+\addtolength{\textheight}{14pt}
+
 % El informe usa PSEUDOCÓDIGO (no código fuente). Traducimos las
 % palabras clave del paquete algorithmic al español.
 \floatname{algorithm}{Algoritmo}
@@ -41,7 +45,7 @@
 % =============================================================
 \begin{document}
 
-\title{Implementación de la Criba de Eratóstenes Distribuida\\
+\title{\LARGE Implementación de la Criba de Eratóstenes Distribuida\\
        mediante el Estándar MPI}
 
 \author{%
@@ -52,18 +56,20 @@
     Maximiliano G\'omez Mallo$^{4}$%
   }\\[4pt]
   \IEEEauthorblockA{%
-    Carrera de Inform\'atica,
-    Universidad Mayor de San Andr\'es\\
+    Estudiantes de la Carrera de Inform\'atica\\
+    Universidad Mayor de San Andr\'es, La Paz, Bolivia\\
     $^{1}$6721489\quad
     $^{2}$6783133\quad
     $^{3}$9939515\quad
-    $^{4}$14480221%
+    $^{4}$14480221\\[3pt]
+    Junio de 2026%
   }
 }
 
 \maketitle
 
 % =============================================================
+\renewcommand{\abstractname}{Resumen}
 \begin{abstract}
 En este trabajo se presenta la implementación paralela de la Criba de
 Eratóstenes utilizando el estándar \textit{Message Passing Interface} (MPI).
@@ -79,11 +85,42 @@ esperable dado el reducido tamaño del problema, donde la fracción secuencial y
 el costo de comunicación punto a punto pesan más a medida que crece el número
 de procesos.
 \end{abstract}
-
+\renewcommand{\IEEEkeywordsname}{Palabras clave}
 \begin{IEEEkeywords}
 Criba de Eratóstenes, MPI, computación paralela, números primos,
 speedup, criba segmentada, criptografía, primos de Mersenne.
 \end{IEEEkeywords}
+
+\vfill
+
+% --- Versión en inglés ---------------------------------------------------
+{\centering\normalsize\textbf{\textit{Implementation of the Distributed Sieve
+of Eratosthenes using the MPI Standard}}\par}
+\vspace{2pt}
+
+\renewcommand{\abstractname}{Abstract}
+\begin{abstract}
+This work presents the parallel implementation of the Sieve of Eratosthenes
+using the \textit{Message Passing Interface} (MPI) standard.
+The algorithm splits the search range $[2, N]$ into equal segments distributed
+among the available processes; the base primes up to $\sqrt{N}$ are sent to each
+process through point-to-point communication (\texttt{MPI\_Send} /
+\texttt{MPI\_Recv}) and each process sieves its own segment independently.
+Performance is evaluated with $N = 10{,}000{,}000$ for 1, 2 and 4 processes,
+measuring the execution time with \texttt{MPI\_Wtime}. The results show a
+speedup close to the ideal with 2 processes (1.997) that becomes sublinear with
+4 (2.474), an expected behavior given the small problem size, where the
+sequential fraction and the cost of point-to-point communication weigh more as
+the number of processes grows.
+\end{abstract}
+\renewcommand{\IEEEkeywordsname}{Keywords}
+\begin{IEEEkeywords}
+Sieve of Eratosthenes, MPI, parallel computing, prime numbers, speedup,
+segmented sieve, cryptography, Mersenne primes.
+\end{IEEEkeywords}
+
+\vfill
+\newpage
 
 % =============================================================
 \section{Introducción}
